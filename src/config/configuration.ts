@@ -7,9 +7,7 @@ export default () => {
   const isLocalStack = !!process.env.AWS_S3_ENDPOINT;
   const awsAccessKeyId = process.env.AWS_ACCESS_KEY_ID;
   const awsSecretAccessKey = process.env.AWS_SECRET_ACCESS_KEY;
-  if (!isLocalStack && (!awsAccessKeyId || !awsSecretAccessKey)) {
-    throw new Error('AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY must be set when not using LocalStack');
-  }
+  const s3Enabled = isLocalStack || (!!awsAccessKeyId && !!awsSecretAccessKey);
 
   return {
     port: parseInt(process.env.PORT || '3100', 10),
