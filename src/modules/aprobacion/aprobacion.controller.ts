@@ -1,18 +1,23 @@
-import { Controller, Get, Patch, Param, Body, UseGuards } from '@nestjs/common';
+import { Controller, Get, Patch, Param, Body, Query, Res, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
+import * as express from 'express';
 import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../../auth/guards/roles.guard';
 import { Roles } from '../../auth/decorators/roles.decorator';
 import { CurrentUser } from '../../auth/decorators/current-user.decorator';
 import { AprobacionService } from './aprobacion.service';
 import { DecidirAprobacionDto } from './dto/decidir-aprobacion.dto';
+import { ExportService, ExportColumn } from '../../common/services/export.service';
 
 @ApiTags('Aprobaciones')
 @ApiBearerAuth()
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Controller('aprobaciones')
 export class AprobacionController {
-  constructor(private readonly service: AprobacionService) {}
+  constructor(
+    private readonly service: AprobacionService,
+    private readonly exportService: ExportService,
+  ) {}
 
   @Get('pendientes')
   @Roles('admin', 'tesoreria')
@@ -24,6 +29,45 @@ export class AprobacionController {
   @Roles('admin', 'tesoreria')
   countPendientes() {
     return this.service.countPendientes();
+  }
+
+  @Get('export')
+  @Roles('admin', 'tesoreria')
+  async export(@Query('formato') formato: string, @Res() res: express.Response) {
+    const data = await this.service.findAll();
+    const columns: ExportColumn[] = [
+      { header: 'Fecha Solicitud', key: 'createdAt', type: 'datetime' },
+      { header: 'Tipo', key: 'tipo', type: 'text', width: 18 },
+      { header: 'Entidad', key: 'entidad', type: 'text', width: 16 },
+      { header: 'Descripción', key: 'descripcion', type: 'text', width: 40 },
+      { header: 'Monto', key: 'monto', type: 'currency' },
+      { header: 'Solicitado Por', key: 'createdByEmail', type: 'text', width: 28 },
+      { header: 'Aprobaciones Requeridas', key: 'aprobacionesRequeridas', type: 'number' },
+      {
+        header: 'Aprobaciones Recibidas',
+        key: 'aprobaciones',
+        type: 'number',
+        format: (v: any) => (Array.isArray(v) ? v.length : 0),
+      },
+      { header: 'Estado', key: 'estado', type: 'text', width: 14 },
+    ];
+    const totalsRow = {
+      createdAt: 'TOTAL',
+      monto: (data as any[]).reduce((s: number, a: any) => s + (a.monto || 0), 0),
+    };
+    if (formato === 'csv') {
+      const csv = await this.exportService.generateCsv(data as any[], columns);
+      res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+      res.setHeader('Content-Disposition', 'attachment; filename=aprobaciones.csv');
+      res.send(csv);
+    } else {
+      const buffer = await this.exportService.generateExcel(data as any[], columns, 'Aprobaciones', {
+        title: 'Aprobaciones', totalsRow,
+      });
+      res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+      res.setHeader('Content-Disposition', 'attachment; filename=aprobaciones.xlsx');
+      res.send(buffer);
+    }
   }
 
   @Get()

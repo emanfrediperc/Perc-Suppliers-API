@@ -26,4 +26,9 @@ export class PaginationQueryDto {
   @ApiPropertyOptional({ enum: ['asc', 'desc'] })
   @IsOptional()
   sortOrder?: 'asc' | 'desc' = 'desc';
+
+  @ApiPropertyOptional({ enum: ['xlsx', 'csv', 'pdf'], description: 'Formato de exportación (solo usado por endpoints /export)' })
+  @IsOptional()
+  @IsIn(['xlsx', 'csv', 'pdf'])
+  formato?: string;
 }

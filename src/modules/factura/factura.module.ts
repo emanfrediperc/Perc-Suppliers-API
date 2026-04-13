@@ -6,8 +6,10 @@ import { OrdenPago, OrdenPagoSchema } from '../orden-pago/schemas/orden-pago.sch
 import { Convenio, ConvenioSchema } from '../convenio/schemas/convenio.schema';
 import { EmpresaProveedora, EmpresaProveedoraSchema } from '../empresa-proveedora/schemas/empresa-proveedora.schema';
 import { EmpresaCliente, EmpresaClienteSchema } from '../empresa-cliente/schemas/empresa-cliente.schema';
+import { User, UserSchema } from '../../auth/schemas/user.schema';
 import { FacturaController } from './factura.controller';
 import { FacturaService } from './factura.service';
+import { FacturaCronService } from './factura-cron.service';
 import { ExportService } from '../../common/services/export.service';
 import { PagoCalculatorService } from '../../common/services/pago-calculator.service';
 
@@ -17,9 +19,10 @@ import { PagoCalculatorService } from '../../common/services/pago-calculator.ser
     { name: OrdenPago.name, schema: OrdenPagoSchema }, { name: Convenio.name, schema: ConvenioSchema },
     { name: EmpresaProveedora.name, schema: EmpresaProveedoraSchema },
     { name: EmpresaCliente.name, schema: EmpresaClienteSchema },
+    { name: User.name, schema: UserSchema },
   ])],
   controllers: [FacturaController],
-  providers: [FacturaService, ExportService, PagoCalculatorService],
+  providers: [FacturaService, FacturaCronService, ExportService, PagoCalculatorService],
   exports: [FacturaService],
 })
 export class FacturaModule {}

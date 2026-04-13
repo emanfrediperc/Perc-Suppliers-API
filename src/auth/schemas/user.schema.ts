@@ -25,6 +25,18 @@ export class User {
 
   @Prop({ default: true })
   activo: boolean;
+
+  @Prop({ default: 0 })
+  failedLoginAttempts: number;
+
+  @Prop({ type: Date, default: null })
+  lockUntil: Date | null;
+
+  @Prop({ default: 0 })
+  tokenVersion: number;
+
+  @Prop({ default: false })
+  mustChangePassword: boolean;
 }
 
 export const UserSchema = SchemaFactory.createForClass(User);

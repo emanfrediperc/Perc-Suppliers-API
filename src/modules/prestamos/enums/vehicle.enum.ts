@@ -1,0 +1,6 @@
+export enum Vehicle {
+  PAGARE = 'PAGARE',
+  TITULOS_ON = 'TITULOS_ON',
+  CVU_TITULOS = 'CVU_TITULOS',
+  CRYPTO_UY = 'CRYPTO_UY',
+}

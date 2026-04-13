@@ -4,6 +4,7 @@ import { EmpresaProveedora, EmpresaProveedoraSchema } from './schemas/empresa-pr
 import { EmpresaProveedoraController } from './empresa-proveedora.controller';
 import { EmpresaProveedoraService } from './empresa-proveedora.service';
 import { AfipModule } from '../../integrations/afip/afip.module';
+import { ExportService } from '../../common/services/export.service';
 
 @Module({
   imports: [
@@ -11,7 +12,7 @@ import { AfipModule } from '../../integrations/afip/afip.module';
     AfipModule,
   ],
   controllers: [EmpresaProveedoraController],
-  providers: [EmpresaProveedoraService],
+  providers: [EmpresaProveedoraService, ExportService],
   exports: [EmpresaProveedoraService, MongooseModule],
 })
 export class EmpresaProveedoraModule {}

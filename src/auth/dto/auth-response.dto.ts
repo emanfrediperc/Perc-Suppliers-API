@@ -6,5 +6,6 @@ export class AuthResponseDto {
     nombre: string;
     apellido: string;
     role: string;
+    mustChangePassword: boolean;
   };
 }

@@ -44,12 +44,22 @@ export class EmailService {
     }
   }
 
+  private escapeHtml(value: string | number | undefined | null): string {
+    if (value === null || value === undefined) return '';
+    return String(value)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  }
+
   async sendAprobacionPendiente(to: string, data: { solicitante: string; tipo: string; monto: number; entidad: string }) {
     const html = `
       <h2>Nueva Aprobacion Pendiente</h2>
-      <p><strong>${data.solicitante}</strong> solicita aprobacion para <strong>${data.tipo}</strong>.</p>
-      <p>Entidad: ${data.entidad}</p>
-      <p>Monto: <strong>$${data.monto.toLocaleString('es-AR', { minimumFractionDigits: 2 })}</strong></p>
+      <p><strong>${this.escapeHtml(data.solicitante)}</strong> solicita aprobacion para <strong>${this.escapeHtml(data.tipo)}</strong>.</p>
+      <p>Entidad: ${this.escapeHtml(data.entidad)}</p>
+      <p>Monto: <strong>$${this.escapeHtml(data.monto.toLocaleString('es-AR', { minimumFractionDigits: 2 }))}</strong></p>
       <p>Ingrese al sistema para revisar y aprobar/rechazar la solicitud.</p>
     `;
     return this.sendEmail(to, `Aprobacion pendiente - ${data.tipo}`, html);
@@ -58,9 +68,9 @@ export class EmailService {
   async sendPagoConfirmado(to: string, data: { ordenNumero: string; monto: number; proveedor: string }) {
     const html = `
       <h2>Pago Confirmado</h2>
-      <p>Se confirmo un pago para la orden <strong>${data.ordenNumero}</strong>.</p>
-      <p>Proveedor: ${data.proveedor}</p>
-      <p>Monto: <strong>$${data.monto.toLocaleString('es-AR', { minimumFractionDigits: 2 })}</strong></p>
+      <p>Se confirmo un pago para la orden <strong>${this.escapeHtml(data.ordenNumero)}</strong>.</p>
+      <p>Proveedor: ${this.escapeHtml(data.proveedor)}</p>
+      <p>Monto: <strong>$${this.escapeHtml(data.monto.toLocaleString('es-AR', { minimumFractionDigits: 2 }))}</strong></p>
     `;
     return this.sendEmail(to, `Pago confirmado - Orden ${data.ordenNumero}`, html);
   }
@@ -68,8 +78,8 @@ export class EmailService {
   async sendFacturaPorVencer(to: string, data: { facturaNumero: string; proveedor: string; vencimiento: string; saldo: number }) {
     const html = `
       <h2>Factura Proxima a Vencer</h2>
-      <p>La factura <strong>${data.facturaNumero}</strong> de <strong>${data.proveedor}</strong> vence el <strong>${data.vencimiento}</strong>.</p>
-      <p>Saldo pendiente: <strong>$${data.saldo.toLocaleString('es-AR', { minimumFractionDigits: 2 })}</strong></p>
+      <p>La factura <strong>${this.escapeHtml(data.facturaNumero)}</strong> de <strong>${this.escapeHtml(data.proveedor)}</strong> vence el <strong>${this.escapeHtml(data.vencimiento)}</strong>.</p>
+      <p>Saldo pendiente: <strong>$${this.escapeHtml(data.saldo.toLocaleString('es-AR', { minimumFractionDigits: 2 }))}</strong></p>
     `;
     return this.sendEmail(to, `Factura por vencer - ${data.facturaNumero}`, html);
   }

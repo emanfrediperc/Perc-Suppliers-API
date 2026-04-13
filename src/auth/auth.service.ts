@@ -1,3 +1,4 @@
+import { randomBytes } from 'crypto';
 import { Injectable, UnauthorizedException, ConflictException, NotFoundException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { JwtService } from '@nestjs/jwt';
@@ -26,6 +27,10 @@ export class AuthService {
     const user = await this.userModel.create({
       ...registerDto,
       password: hashedPassword,
+      tokenVersion: 0,
+      failedLoginAttempts: 0,
+      lockUntil: null,
+      mustChangePassword: false,
     });
 
     return this.generateAuthResponse(user);
@@ -41,9 +46,29 @@ export class AuthService {
       throw new UnauthorizedException('Usuario desactivado');
     }
 
+    const now = new Date();
+    if (user.lockUntil && user.lockUntil > now) {
+      const minutesLeft = Math.ceil((user.lockUntil.getTime() - now.getTime()) / 60000);
+      throw new UnauthorizedException(
+        `Cuenta bloqueada por intentos fallidos. Intentá de nuevo en ${minutesLeft} minutos.`,
+      );
+    }
+
     const isPasswordValid = await bcrypt.compare(loginDto.password, user.password);
     if (!isPasswordValid) {
+      user.failedLoginAttempts = (user.failedLoginAttempts || 0) + 1;
+      if (user.failedLoginAttempts >= 5) {
+        user.lockUntil = new Date(now.getTime() + 15 * 60 * 1000);
+        user.failedLoginAttempts = 0;
+      }
+      await user.save();
       throw new UnauthorizedException('Credenciales invalidas');
+    }
+
+    if (user.failedLoginAttempts > 0 || user.lockUntil) {
+      user.failedLoginAttempts = 0;
+      user.lockUntil = null;
+      await user.save();
     }
 
     return this.generateAuthResponse(user);
@@ -70,14 +95,28 @@ export class AuthService {
   async resetPassword(userId: string): Promise<{ temporaryPassword: string }> {
     const user = await this.userModel.findById(userId);
     if (!user) throw new NotFoundException('Usuario no encontrado');
-    const temporaryPassword = Math.random().toString(36).slice(-8) + Math.random().toString(36).slice(-4).toUpperCase();
+    const temporaryPassword = randomBytes(9).toString('base64url');
     user.password = await bcrypt.hash(temporaryPassword, 10);
+    user.mustChangePassword = true;
+    user.tokenVersion = (user.tokenVersion || 0) + 1;
     await user.save();
     return { temporaryPassword };
   }
 
+  async changePassword(userId: string, oldPassword: string, newPassword: string) {
+    const user = await this.userModel.findById(userId);
+    if (!user) throw new NotFoundException('Usuario no encontrado');
+    const valid = await bcrypt.compare(oldPassword, user.password);
+    if (!valid) throw new UnauthorizedException('Contraseña actual incorrecta');
+    user.password = await bcrypt.hash(newPassword, 10);
+    user.mustChangePassword = false;
+    user.tokenVersion = (user.tokenVersion || 0) + 1;
+    await user.save();
+    return this.generateAuthResponse(user);
+  }
+
   private generateAuthResponse(user: UserDocument): AuthResponseDto {
-    const payload = { sub: user._id, email: user.email, role: user.role };
+    const payload = { sub: user._id, email: user.email, role: user.role, tokenVersion: user.tokenVersion ?? 0 };
     return {
       access_token: this.jwtService.sign(payload),
       user: {
@@ -86,6 +125,7 @@ export class AuthService {
         nombre: user.nombre,
         apellido: user.apellido,
         role: user.role,
+        mustChangePassword: user.mustChangePassword ?? false,
       },
     };
   }

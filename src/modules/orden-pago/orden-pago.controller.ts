@@ -32,26 +32,47 @@ export class OrdenPagoController {
     const bigQuery = { ...query, page: 1, limit: 10000 };
     const result = await this.service.findAll(bigQuery);
     const columns: ExportColumn[] = [
-      { header: 'Numero', key: 'numero', width: 20 },
-      { header: 'Fecha', key: 'fecha', width: 15, format: (v: any) => v ? new Date(v).toLocaleDateString('es-AR') : '' },
-      { header: 'Proveedor', key: 'empresaProveedora.razonSocial', width: 30 },
-      { header: 'Monto Total', key: 'montoTotal', width: 18 },
-      { header: 'Pagado', key: 'montoPagado', width: 18 },
-      { header: 'Saldo', key: 'saldoPendiente', width: 18 },
-      { header: 'Moneda', key: 'moneda', width: 10 },
-      { header: 'Estado', key: 'estado', width: 12 },
+      { header: 'Número', key: 'numero', type: 'text', width: 22 },
+      { header: 'Fecha', key: 'fecha', type: 'date' },
+      { header: 'Proveedor', key: 'empresaProveedora.razonSocial', type: 'text', width: 32 },
+      { header: 'CUIT', key: 'empresaProveedora.cuit', type: 'cuit' },
+      { header: 'Moneda', key: 'moneda', type: 'text', width: 10 },
+      { header: 'Monto Total', key: 'montoTotal', type: 'currency' },
+      { header: 'Pagado', key: 'montoPagado', type: 'currency' },
+      { header: 'Saldo', key: 'saldoPendiente', type: 'currency' },
+      { header: 'Estado', key: 'estado', type: 'text', width: 14 },
     ];
+    const totalsRow = {
+      numero: 'TOTAL',
+      montoTotal: result.data.reduce((s, o: any) => s + (o.montoTotal || 0), 0),
+      montoPagado: result.data.reduce((s, o: any) => s + (o.montoPagado || 0), 0),
+      saldoPendiente: result.data.reduce((s, o: any) => s + (o.saldoPendiente || 0), 0),
+    };
+    const filterSummary = this.buildFilterSummary(query);
     if (formato === 'csv') {
       const csv = await this.exportService.generateCsv(result.data, columns);
       res.setHeader('Content-Type', 'text/csv; charset=utf-8');
       res.setHeader('Content-Disposition', 'attachment; filename=ordenes-pago.csv');
       res.send(csv);
     } else {
-      const buffer = await this.exportService.generateExcel(result.data, columns, 'Ordenes de Pago');
+      const buffer = await this.exportService.generateExcel(result.data, columns, 'Ordenes de Pago', {
+        title: 'Órdenes de Pago',
+        filterSummary,
+        totalsRow,
+      });
       res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
       res.setHeader('Content-Disposition', 'attachment; filename=ordenes-pago.xlsx');
       res.send(buffer);
     }
+  }
+
+  private buildFilterSummary(query: OrdenPagoQueryDto): string | undefined {
+    const parts: string[] = [];
+    if ((query as any).estado) parts.push(`Estado: ${(query as any).estado}`);
+    if ((query as any).search) parts.push(`Búsqueda: "${(query as any).search}"`);
+    if ((query as any).desde) parts.push(`Desde: ${(query as any).desde}`);
+    if ((query as any).hasta) parts.push(`Hasta: ${(query as any).hasta}`);
+    return parts.length ? parts.join(' · ') : undefined;
   }
 
   @Get(':id') findOne(@Param('id') id: string) { return this.service.findOne(id); }

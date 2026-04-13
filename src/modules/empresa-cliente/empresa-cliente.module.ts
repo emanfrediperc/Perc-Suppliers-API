@@ -4,6 +4,7 @@ import { EmpresaCliente, EmpresaClienteSchema } from './schemas/empresa-cliente.
 import { EmpresaClienteController } from './empresa-cliente.controller';
 import { EmpresaClienteService } from './empresa-cliente.service';
 import { AfipModule } from '../../integrations/afip/afip.module';
+import { ExportService } from '../../common/services/export.service';
 
 @Module({
   imports: [
@@ -11,7 +12,7 @@ import { AfipModule } from '../../integrations/afip/afip.module';
     AfipModule,
   ],
   controllers: [EmpresaClienteController],
-  providers: [EmpresaClienteService],
+  providers: [EmpresaClienteService, ExportService],
   exports: [EmpresaClienteService, MongooseModule],
 })
 export class EmpresaClienteModule {}

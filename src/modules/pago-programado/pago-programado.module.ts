@@ -4,6 +4,7 @@ import { PagoProgramado, PagoProgramadoSchema } from './schemas/pago-programado.
 import { PagoProgramadoController } from './pago-programado.controller';
 import { PagoProgramadoService } from './pago-programado.service';
 import { OrdenPagoModule } from '../orden-pago/orden-pago.module';
+import { ExportService } from '../../common/services/export.service';
 
 @Module({
   imports: [
@@ -11,6 +12,6 @@ import { OrdenPagoModule } from '../orden-pago/orden-pago.module';
     OrdenPagoModule,
   ],
   controllers: [PagoProgramadoController],
-  providers: [PagoProgramadoService],
+  providers: [PagoProgramadoService, ExportService],
 })
 export class PagoProgramadoModule {}

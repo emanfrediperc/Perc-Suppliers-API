@@ -31,34 +31,58 @@ export class FacturaController {
   @Roles('admin', 'tesoreria', 'contabilidad')
   create(@Body() dto: CreateFacturaDto) { return this.service.create(dto); }
 
-  @Get() findAll(@Query() query: FacturaQueryDto) { return this.service.findAll(query); }
+  @Get()
+  @Roles('admin', 'tesoreria', 'contabilidad', 'consulta')
+  findAll(@Query() query: FacturaQueryDto) { return this.service.findAll(query); }
 
   @Get('export')
+  @Roles('admin', 'tesoreria', 'contabilidad', 'consulta')
   async export(@Query() query: FacturaQueryDto, @Query('formato') formato: string, @Res() res: express.Response) {
     const bigQuery = { ...query, page: 1, limit: 10000 };
     const result = await this.service.findAll(bigQuery);
     const columns: ExportColumn[] = [
-      { header: 'Numero', key: 'numero', width: 25 },
-      { header: 'Tipo', key: 'tipo', width: 8 },
-      { header: 'Fecha', key: 'fecha', width: 15, format: (v: any) => v ? new Date(v).toLocaleDateString('es-AR') : '' },
-      { header: 'Vencimiento', key: 'fechaVencimiento', width: 15, format: (v: any) => v ? new Date(v).toLocaleDateString('es-AR') : '' },
-      { header: 'Proveedor', key: 'empresaProveedora.razonSocial', width: 30 },
-      { header: 'Monto Total', key: 'montoTotal', width: 18 },
-      { header: 'Pagado', key: 'montoPagado', width: 18 },
-      { header: 'Saldo', key: 'saldoPendiente', width: 18 },
-      { header: 'Estado', key: 'estado', width: 12 },
+      { header: 'Número', key: 'numero', type: 'text', width: 25 },
+      { header: 'Tipo', key: 'tipo', type: 'text', width: 10 },
+      { header: 'Fecha', key: 'fecha', type: 'date' },
+      { header: 'Vencimiento', key: 'fechaVencimiento', type: 'date' },
+      { header: 'Proveedor', key: 'empresaProveedora.razonSocial', type: 'text', width: 32 },
+      { header: 'CUIT', key: 'empresaProveedora.cuit', type: 'cuit' },
+      { header: 'Monto Total', key: 'montoTotal', type: 'currency' },
+      { header: 'Pagado', key: 'montoPagado', type: 'currency' },
+      { header: 'Saldo', key: 'saldoPendiente', type: 'currency' },
+      { header: 'Estado', key: 'estado', type: 'text', width: 14 },
     ];
+    const totalsRow = {
+      numero: 'TOTAL',
+      montoTotal: result.data.reduce((s, f: any) => s + (f.montoTotal || 0), 0),
+      montoPagado: result.data.reduce((s, f: any) => s + (f.montoPagado || 0), 0),
+      saldoPendiente: result.data.reduce((s, f: any) => s + (f.saldoPendiente || 0), 0),
+    };
+    const filterSummary = this.buildFilterSummary(query);
     if (formato === 'csv') {
       const csv = await this.exportService.generateCsv(result.data, columns);
       res.setHeader('Content-Type', 'text/csv; charset=utf-8');
       res.setHeader('Content-Disposition', 'attachment; filename=facturas.csv');
       res.send(csv);
     } else {
-      const buffer = await this.exportService.generateExcel(result.data, columns, 'Facturas');
+      const buffer = await this.exportService.generateExcel(result.data, columns, 'Facturas', {
+        title: 'Facturas',
+        filterSummary,
+        totalsRow,
+      });
       res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
       res.setHeader('Content-Disposition', 'attachment; filename=facturas.xlsx');
       res.send(buffer);
     }
+  }
+
+  private buildFilterSummary(query: FacturaQueryDto): string | undefined {
+    const parts: string[] = [];
+    if (query.estado) parts.push(`Estado: ${query.estado}`);
+    if (query.search) parts.push(`Búsqueda: "${query.search}"`);
+    if ((query as any).desde) parts.push(`Desde: ${(query as any).desde}`);
+    if ((query as any).hasta) parts.push(`Hasta: ${(query as any).hasta}`);
+    return parts.length ? parts.join(' · ') : undefined;
   }
 
   @Post('import')
@@ -94,6 +118,7 @@ export class FacturaController {
   }
 
   @Get('check-duplicate')
+  @Roles('admin', 'tesoreria', 'contabilidad', 'consulta')
   checkDuplicate(
     @Query('numero') numero: string,
     @Query('empresaProveedora') empresaProveedora: string,
@@ -102,9 +127,12 @@ export class FacturaController {
     return this.service.checkDuplicate(numero, empresaProveedora, montoTotal ? +montoTotal : undefined);
   }
 
-  @Get(':id') findOne(@Param('id') id: string) { return this.service.findOne(id); }
+  @Get(':id')
+  @Roles('admin', 'tesoreria', 'contabilidad', 'consulta')
+  findOne(@Param('id') id: string) { return this.service.findOne(id); }
 
   @Get(':id/preview')
+  @Roles('admin', 'tesoreria', 'contabilidad', 'consulta')
   async preview(@Param('id') id: string) {
     const factura = await this.service.findOne(id);
     if (!factura.archivoKey) throw new NotFoundException('La factura no tiene archivo adjunto');

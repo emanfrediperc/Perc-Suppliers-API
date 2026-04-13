@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, BadRequestException } from '@nestjs/common';
 
 export interface AfipContribuyente {
   razonSocial: string;
@@ -14,6 +14,9 @@ export class AfipService {
 
   async consultarCuit(cuit: string): Promise<AfipContribuyente | null> {
     const cleaned = cuit.replace(/-/g, '');
+    if (!/^\d{11}$/.test(cleaned)) {
+      throw new BadRequestException('CUIT inválido — debe ser 11 dígitos');
+    }
     try {
       const res = await fetch(
         `https://afip.tangofactura.com/Rest/GetContribuyenteFull?cuit=${cleaned}`,

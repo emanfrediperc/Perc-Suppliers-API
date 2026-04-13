@@ -27,6 +27,7 @@ import { EmailModule } from './integrations/email/email.module';
 import { BusquedaModule } from './modules/busqueda/busqueda.module';
 import { ComentarioModule } from './modules/comentario/comentario.module';
 import { ConfiguracionModule } from './modules/configuracion/configuracion.module';
+import { PrestamosModule } from './modules/prestamos/prestamos.module';
 import { AuditLogInterceptor } from './modules/audit-log/audit-log.interceptor';
 
 @Module({
@@ -65,6 +66,7 @@ import { AuditLogInterceptor } from './modules/audit-log/audit-log.interceptor';
     BusquedaModule,
     ComentarioModule,
     ConfiguracionModule,
+    PrestamosModule,
   ],
   providers: [
     {

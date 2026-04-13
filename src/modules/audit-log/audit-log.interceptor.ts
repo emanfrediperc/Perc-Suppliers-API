@@ -32,6 +32,8 @@ export class AuditLogInterceptor implements NestInterceptor {
     else if (url.includes('/sync-finnegans')) accion = 'sync';
     else if (url.includes('/aprobar')) accion = 'aprobar';
     else if (url.includes('/rechazar')) accion = 'rechazar';
+    else if (url.includes('/clear')) accion = 'cancelar';
+    else if (url.includes('/renew')) accion = 'renovar';
 
     return next.handle().pipe(
       tap({

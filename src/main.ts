@@ -29,15 +29,23 @@ async function bootstrap() {
     credentials: true,
   });
 
-  const config = new DocumentBuilder()
-    .setTitle('Perc Suppliers API')
-    .setDescription('API para gestion de pagos a proveedores')
-    .setVersion('1.0')
-    .addBearerAuth()
-    .build();
+  const isProduction = process.env.NODE_ENV === 'production';
+  const swaggerEnabled = process.env.SWAGGER_ENABLED === '1';
 
-  const document = SwaggerModule.createDocument(app, config);
-  SwaggerModule.setup('api/docs', app, document);
+  if (!isProduction || swaggerEnabled) {
+    const config = new DocumentBuilder()
+      .setTitle('Perc Suppliers API')
+      .setDescription('API para gestion de pagos a proveedores')
+      .setVersion('1.0')
+      .addBearerAuth()
+      .build();
+
+    const document = SwaggerModule.createDocument(app, config);
+    SwaggerModule.setup('api/docs', app, document);
+    console.log(`Swagger UI: http://localhost:${process.env.PORT || 3100}/api/docs`);
+  } else {
+    console.log('Swagger UI disabled (NODE_ENV=production)');
+  }
 
   const port = process.env.PORT || 3100;
   await app.listen(port);

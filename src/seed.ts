@@ -1,3 +1,4 @@
+import { randomBytes } from 'crypto';
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
 import { Model, Types } from 'mongoose';
@@ -17,6 +18,11 @@ function daysFromNow(n: number): Date {
 }
 
 async function seed() {
+  if (process.env.NODE_ENV === 'production' && process.env.ALLOW_SEED !== '1') {
+    throw new Error('Seed no permitido en producción. Seteá ALLOW_SEED=1 para forzar.');
+  }
+  const seedPassword = process.env.SEED_PASSWORD || randomBytes(9).toString('base64url');
+
   const app = await NestFactory.createApplicationContext(AppModule);
 
   const userModel = app.get<Model<any>>(getModelToken('User'));
@@ -26,6 +32,7 @@ async function seed() {
   const facturaModel = app.get<Model<any>>(getModelToken('Factura'));
   const ordenPagoModel = app.get<Model<any>>(getModelToken('OrdenPago'));
   const pagoModel = app.get<Model<any>>(getModelToken('Pago'));
+  const prestamoModel = app.get<Model<any>>(getModelToken('Prestamo'));
 
   // Clean all collections
   await Promise.all([
@@ -36,17 +43,19 @@ async function seed() {
     facturaModel.deleteMany({}),
     ordenPagoModel.deleteMany({}),
     pagoModel.deleteMany({}),
+    prestamoModel.deleteMany({}),
   ]);
   console.log('Collections cleaned');
 
   // ============ USERS ============
-  const hashedPassword = await bcrypt.hash('admin123', 10);
+  const hashedPassword = await bcrypt.hash(seedPassword, 10);
   await userModel.create({
     email: 'admin@perc.com',
     password: hashedPassword,
     nombre: 'Admin',
     apellido: 'Perc',
     role: 'admin',
+    mustChangePassword: true,
   });
   await userModel.create({
     email: 'tesoreria@perc.com',
@@ -54,6 +63,7 @@ async function seed() {
     nombre: 'Laura',
     apellido: 'Tesoreria',
     role: 'tesoreria',
+    mustChangePassword: true,
   });
   await userModel.create({
     email: 'contabilidad@perc.com',
@@ -61,6 +71,7 @@ async function seed() {
     nombre: 'Carlos',
     apellido: 'Contabilidad',
     role: 'contabilidad',
+    mustChangePassword: true,
   });
   await userModel.create({
     email: 'consulta@perc.com',
@@ -68,8 +79,9 @@ async function seed() {
     nombre: 'Maria',
     apellido: 'Consulta',
     role: 'consulta',
+    mustChangePassword: true,
   });
-  console.log('4 users created: admin/tesoreria/contabilidad/consulta@perc.com / admin123');
+  console.log('\n=== SEED PASSWORD (for all 4 users): ' + seedPassword + ' ===\n');
 
   // ============ EMPRESAS PROVEEDORAS ============
   const prov1 = await empresaProvModel.create({
@@ -423,6 +435,128 @@ async function seed() {
 
   console.log('4 pagos created (linked to ordenes)');
 
+  // ============ PRESTAMOS ============
+  // Helper to build EmpresaRef subdocument from an empresa doc
+  const refOf = (doc: any, kind: 'cliente' | 'proveedora') => ({
+    empresaId: doc._id,
+    empresaKind: kind,
+    razonSocialCache: doc.razonSocial,
+  });
+
+  // 1. Active USD: Perc Financial → Inversiones del Sur
+  await prestamoModel.create({
+    lender: refOf(cli1, 'cliente'),
+    borrower: refOf(cli2, 'cliente'),
+    currency: 'USD',
+    capital: 250_000,
+    rate: 8,
+    startDate: new Date('2025-12-01'),
+    dueDate: new Date('2026-06-30'),
+    vehicle: 'PAGARE',
+    balanceCut: '12-31',
+    status: 'ACTIVE',
+    history: [{ date: new Date('2025-12-01'), action: 'Creado', detail: 'Capital 250.000 · Tasa 8% · PAGARE' }],
+  });
+
+  // 2. Active ARS: Inversiones del Sur → Comercio Digital
+  await prestamoModel.create({
+    lender: refOf(cli2, 'cliente'),
+    borrower: refOf(cli3, 'cliente'),
+    currency: 'ARS',
+    capital: 150_000_000,
+    rate: 45,
+    startDate: new Date('2026-01-15'),
+    dueDate: new Date('2026-07-15'),
+    vehicle: 'TITULOS_ON',
+    balanceCut: '12-31',
+    status: 'ACTIVE',
+    history: [{ date: new Date('2026-01-15'), action: 'Creado', detail: 'Capital 150.000.000 · Tasa 45% · TITULOS_ON' }],
+  });
+
+  // 3. Active USDC: Distribuidora Central → Perc Financial
+  await prestamoModel.create({
+    lender: refOf(cli4, 'cliente'),
+    borrower: refOf(cli1, 'cliente'),
+    currency: 'USDC',
+    capital: 75_000,
+    rate: 6,
+    startDate: new Date('2026-02-01'),
+    dueDate: new Date('2026-08-01'),
+    vehicle: 'CRYPTO_UY',
+    balanceCut: '06-30',
+    status: 'ACTIVE',
+    history: [{ date: new Date('2026-02-01'), action: 'Creado', detail: 'Capital 75.000 · Tasa 6% · CRYPTO_UY' }],
+  });
+
+  // 4. Cleared ARS: Comercio Digital → Distribuidora Central (saldado)
+  await prestamoModel.create({
+    lender: refOf(cli3, 'cliente'),
+    borrower: refOf(cli4, 'cliente'),
+    currency: 'ARS',
+    capital: 50_000_000,
+    rate: 55,
+    startDate: new Date('2025-08-01'),
+    dueDate: new Date('2026-02-01'),
+    vehicle: 'PAGARE',
+    balanceCut: '12-31',
+    status: 'CLEARED',
+    history: [
+      { date: new Date('2025-08-01'), action: 'Creado', detail: 'Capital 50.000.000 · Tasa 55% · PAGARE' },
+      { date: new Date('2026-02-01'), action: 'Cancelado', detail: 'Capital 50.000.000,00 + Int 13.863.013,70 = Total 63.863.013,70' },
+    ],
+  });
+
+  // 5a. Renewed parent ARS: Perc Financial → Comercio Digital
+  const renewedParent = await prestamoModel.create({
+    lender: refOf(cli1, 'cliente'),
+    borrower: refOf(cli3, 'cliente'),
+    currency: 'ARS',
+    capital: 80_000_000,
+    rate: 42,
+    startDate: new Date('2025-10-01'),
+    dueDate: new Date('2026-04-01'),
+    vehicle: 'CVU_TITULOS',
+    balanceCut: '12-31',
+    status: 'RENEWED',
+    history: [
+      { date: new Date('2025-10-01'), action: 'Creado', detail: 'Capital 80.000.000 · Tasa 42% · CVU_TITULOS' },
+      { date: new Date('2026-04-01'), action: 'Renovado', detail: 'Renovado → nuevo préstamo' },
+    ],
+  });
+
+  // 5b. Renewed child ACTIVE (capital acumulado del padre + intereses)
+  await prestamoModel.create({
+    lender: refOf(cli1, 'cliente'),
+    borrower: refOf(cli3, 'cliente'),
+    currency: 'ARS',
+    capital: 96_800_000, // ~80M + 6 meses de interés a 42%
+    rate: 45,
+    startDate: new Date('2026-04-01'),
+    dueDate: new Date('2026-10-01'),
+    vehicle: 'CVU_TITULOS',
+    balanceCut: '12-31',
+    status: 'ACTIVE',
+    renewedFrom: renewedParent._id,
+    history: [{ date: new Date('2026-04-01'), action: 'Creado', detail: 'Capital 96.800.000 · Tasa 45% · CVU_TITULOS (Renovación)' }],
+  });
+
+  // 6. Edge case — cliente ↔ proveedora: Perc Financial → Tech Solutions (proveedor externo)
+  await prestamoModel.create({
+    lender: refOf(cli1, 'cliente'),
+    borrower: refOf(prov1, 'proveedora'),
+    currency: 'USD',
+    capital: 50_000,
+    rate: 5,
+    startDate: new Date('2026-01-01'),
+    dueDate: new Date('2026-12-31'),
+    vehicle: 'PAGARE',
+    balanceCut: '12-31',
+    status: 'ACTIVE',
+    history: [{ date: new Date('2026-01-01'), action: 'Creado', detail: 'Capital 50.000 · Tasa 5% · PAGARE (edge case cliente↔proveedora)' }],
+  });
+
+  console.log('7 prestamos created (5 active + 1 cleared + 1 renewed with child)');
+
   console.log('\n=== SEED COMPLETED ===');
   console.log('Data summary:');
   console.log('  - 4 users (admin/tesoreria/contabilidad/consulta@perc.com / admin123)');
@@ -432,6 +566,7 @@ async function seed() {
   console.log('  - 8 ordenes de pago');
   console.log('  - 17 facturas (various states)');
   console.log('  - 4 pagos (vinculados a ordenes)');
+  console.log('  - 7 prestamos (5 active + 1 cleared + 1 renewed with child)');
 
   await app.close();
 }

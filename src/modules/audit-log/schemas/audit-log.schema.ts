@@ -11,7 +11,7 @@ export class AuditLog {
   @Prop({ required: true })
   usuarioEmail: string;
 
-  @Prop({ required: true, enum: ['crear', 'editar', 'eliminar', 'pagar', 'anular', 'aprobar', 'rechazar', 'login', 'sync'] })
+  @Prop({ required: true, enum: ['crear', 'editar', 'eliminar', 'pagar', 'anular', 'aprobar', 'rechazar', 'login', 'sync', 'cancelar', 'renovar'] })
   accion: string;
 
   @Prop({ required: true })

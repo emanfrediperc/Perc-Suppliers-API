@@ -28,8 +28,5 @@ export class OrdenPagoQueryDto extends PaginationQueryDto {
   @IsDateString()
   fechaHasta?: string;
 
-  @ApiPropertyOptional({ enum: ['xlsx', 'csv'] })
-  @IsOptional()
-  @IsString()
-  formato?: string;
+  // formato is inherited from PaginationQueryDto
 }
