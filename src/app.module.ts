@@ -28,6 +28,7 @@ import { BusquedaModule } from './modules/busqueda/busqueda.module';
 import { ComentarioModule } from './modules/comentario/comentario.module';
 import { ConfiguracionModule } from './modules/configuracion/configuracion.module';
 import { PrestamosModule } from './modules/prestamos/prestamos.module';
+import { CompraMonedaExtranjeraModule } from './modules/compra-moneda-extranjera/compra-moneda-extranjera.module';
 import { AuditLogInterceptor } from './modules/audit-log/audit-log.interceptor';
 
 @Module({
@@ -67,6 +68,7 @@ import { AuditLogInterceptor } from './modules/audit-log/audit-log.interceptor';
     ComentarioModule,
     ConfiguracionModule,
     PrestamosModule,
+    CompraMonedaExtranjeraModule,
   ],
   providers: [
     {
