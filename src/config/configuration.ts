@@ -41,5 +41,13 @@ export default () => {
       clientId: process.env.FINNEGANS_CLIENT_ID || '',
       clientSecret: process.env.FINNEGANS_CLIENT_SECRET || '',
     },
+    magicLink: {
+      /** Habilita la generación de tokens y el envío de magic links por email. */
+      enabled: process.env.ENABLE_MAGIC_LINK === 'true',
+      /** URL base del frontend donde vive la ruta /aprobar (sin trailing slash). */
+      baseUrl: process.env.MAGIC_LINK_BASE_URL || 'http://localhost:4200/aprobar',
+      /** Horas de validez del token desde su emisión. */
+      ttlHours: parseInt(process.env.MAGIC_LINK_TTL_HOURS || '48', 10),
+    },
   };
 };

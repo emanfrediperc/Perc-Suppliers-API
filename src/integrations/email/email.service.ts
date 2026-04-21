@@ -83,4 +83,79 @@ export class EmailService {
     `;
     return this.sendEmail(to, `Factura por vencer - ${data.facturaNumero}`, html);
   }
+
+  /**
+   * Envía un magic link de aprobación al aprobador indicado.
+   *
+   * Nota sobre Referrer-Policy: esta cabecera no se agrega aquí porque aplica
+   * al HTML de la PÁGINA del frontend (ruta /aprobar), no al email en sí.
+   * El navegador del aprobador abre esa ruta y el meta tag `<meta name="referrer"
+   * content="no-referrer">` del WebApp evita que el token sea filtrado por el
+   * header Referer al cargar assets de terceros. El servicio de email no tiene
+   * nada que hacer al respecto.
+   */
+  async sendAprobacionMagicLink(
+    to: string,
+    data: {
+      tipo: string;
+      entidad: string;
+      descripcion: string;
+      monto: number;
+      solicitante: string;
+      magicLink: string;
+      expiraEn: string;
+    },
+  ): Promise<boolean> {
+    const montoFormateado = `$${data.monto.toLocaleString('es-AR', { minimumFractionDigits: 2 })}`;
+    const html = `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+        <h2 style="color: #333;">Aprobación pendiente</h2>
+        <p>Tenés una solicitud de aprobación pendiente que requiere tu acción.</p>
+
+        <table style="width: 100%; border-collapse: collapse; margin: 16px 0;">
+          <tr>
+            <td style="padding: 8px; font-weight: bold; width: 40%;">Operación:</td>
+            <td style="padding: 8px;">${this.escapeHtml(data.tipo)}</td>
+          </tr>
+          <tr style="background: #f9f9f9;">
+            <td style="padding: 8px; font-weight: bold;">Entidad:</td>
+            <td style="padding: 8px;">${this.escapeHtml(data.entidad)}</td>
+          </tr>
+          <tr>
+            <td style="padding: 8px; font-weight: bold;">Descripción:</td>
+            <td style="padding: 8px;">${this.escapeHtml(data.descripcion)}</td>
+          </tr>
+          <tr style="background: #f9f9f9;">
+            <td style="padding: 8px; font-weight: bold;">Monto:</td>
+            <td style="padding: 8px;"><strong>${this.escapeHtml(montoFormateado)}</strong></td>
+          </tr>
+          <tr>
+            <td style="padding: 8px; font-weight: bold;">Solicitado por:</td>
+            <td style="padding: 8px;">${this.escapeHtml(data.solicitante)}</td>
+          </tr>
+        </table>
+
+        <p style="margin: 24px 0 8px;">Usá los botones a continuación para registrar tu decisión:</p>
+
+        <div style="text-align: center; margin: 24px 0;">
+          <a href="${this.escapeHtml(data.magicLink)}&decision=aprobar"
+             style="display: inline-block; background-color: #28a745; color: #fff; padding: 12px 32px;
+                    border-radius: 4px; text-decoration: none; font-size: 16px; margin-right: 16px;">
+            Aprobar
+          </a>
+          <a href="${this.escapeHtml(data.magicLink)}&decision=rechazar"
+             style="display: inline-block; background-color: #dc3545; color: #fff; padding: 12px 32px;
+                    border-radius: 4px; text-decoration: none; font-size: 16px;">
+            Rechazar
+          </a>
+        </div>
+
+        <p style="color: #666; font-size: 13px;">
+          Este link expira el <strong>${this.escapeHtml(data.expiraEn)}</strong>.
+          Si no solicitaste esta notificación, podés ignorar este email.
+        </p>
+      </div>
+    `;
+    return this.sendEmail(to, `Aprobación pendiente - ${data.entidad}`, html);
+  }
 }
