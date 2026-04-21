@@ -10,6 +10,8 @@ import { EstadoCompraMonedaExtranjera } from './enums/estado-compra.enum';
 import {
   APROBACION_RESUELTA,
   AprobacionResueltaEvent,
+  APROBACION_REENVIADA,
+  AprobacionReenviadaEvent,
 } from '../aprobacion/events/aprobacion-resuelta.event';
 
 @Injectable()
@@ -35,6 +37,20 @@ export class CompraMonedaExtranjeraAprobacionListener {
       compra.estado = EstadoCompraMonedaExtranjera.ANULADA;
     }
 
+    await compra.save();
+  }
+
+  // T035 — Reenvío: transicionar ANULADA → ESPERANDO_APROBACION para el nuevo ciclo.
+  // Idempotente: solo actúa si el estado actual es ANULADA.
+  @OnEvent(APROBACION_REENVIADA)
+  async handleReenviada(event: AprobacionReenviadaEvent): Promise<void> {
+    if (event.entidad !== 'compras-fx') return;
+
+    const compra = await this.model.findById(event.entidadId);
+    if (!compra) return;
+    if (compra.estado !== EstadoCompraMonedaExtranjera.ANULADA) return; // idempotencia
+
+    compra.estado = EstadoCompraMonedaExtranjera.ESPERANDO_APROBACION;
     await compra.save();
   }
 }

@@ -1,5 +1,5 @@
 import { Controller, Get, Patch, Param, Body, Query, Res, UseGuards } from '@nestjs/common';
-import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
+import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import * as express from 'express';
 import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../../auth/guards/roles.guard';
@@ -83,6 +83,22 @@ export class AprobacionController {
   @Get('entidad/:entidad/:entidadId')
   findByEntity(@Param('entidad') entidad: string, @Param('entidadId') entidadId: string) {
     return this.service.findByEntity(entidad, entidadId);
+  }
+
+  /**
+   * T032 — Reenviar una aprobación rechazada.
+   * Solo el creador de la solicitud puede reenviarla (validado en el servicio).
+   * Solo está disponible para roles admin y tesorería.
+   */
+  @Patch(':id/reenviar')
+  @Roles('admin', 'tesoreria')
+  @ApiOperation({ summary: 'Reenviar una aprobación rechazada al aprobador' })
+  reenviar(@Param('id') id: string, @CurrentUser() user: any) {
+    return this.service.reenviar(id, {
+      userId: user.userId,
+      email: user.email,
+      nombre: user.nombre,
+    });
   }
 
   @Patch(':id/decidir')

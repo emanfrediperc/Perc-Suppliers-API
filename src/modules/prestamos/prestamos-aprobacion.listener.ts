@@ -7,6 +7,8 @@ import { PrestamoStatus } from './enums/prestamo-status.enum';
 import {
   APROBACION_RESUELTA,
   AprobacionResueltaEvent,
+  APROBACION_REENVIADA,
+  AprobacionReenviadaEvent,
 } from '../aprobacion/events/aprobacion-resuelta.event';
 
 @Injectable()
@@ -41,6 +43,25 @@ export class PrestamosAprobacionListener {
       });
     }
 
+    await prestamo.save();
+  }
+
+  // T034 — Reenvío: transicionar ANULADO → ESPERANDO_APROBACION para que el aprobador
+  // pueda votar sobre el nuevo ciclo. Idempotente: solo actúa si el estado es ANULADO.
+  @OnEvent(APROBACION_REENVIADA)
+  async handleReenviada(event: AprobacionReenviadaEvent): Promise<void> {
+    if (event.entidad !== 'prestamos') return;
+
+    const prestamo = await this.prestamoModel.findById(event.entidadId);
+    if (!prestamo) return;
+    if (prestamo.status !== PrestamoStatus.ANULADO) return; // idempotencia: solo desde rechazado
+
+    prestamo.status = PrestamoStatus.ESPERANDO_APROBACION;
+    prestamo.history.push({
+      date: new Date(),
+      action: 'Reenviado',
+      detail: `Solicitud reenviada para nueva aprobación (aprobacionId: ${event.aprobacionId})`,
+    });
     await prestamo.save();
   }
 }

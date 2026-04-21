@@ -6,6 +6,8 @@ import { OrdenPago, OrdenPagoDocument } from './schemas/orden-pago.schema';
 import {
   APROBACION_RESUELTA,
   AprobacionResueltaEvent,
+  APROBACION_REENVIADA,
+  AprobacionReenviadaEvent,
 } from '../aprobacion/events/aprobacion-resuelta.event';
 
 @Injectable()
@@ -30,6 +32,20 @@ export class OrdenPagoAprobacionListener {
       orden.estado = 'anulada';
     }
 
+    await orden.save();
+  }
+
+  // T036 — Reenvío: transicionar anulada → esperando_aprobacion para el nuevo ciclo.
+  // Idempotente: solo actúa si el estado actual es 'anulada'.
+  @OnEvent(APROBACION_REENVIADA)
+  async handleReenviada(event: AprobacionReenviadaEvent): Promise<void> {
+    if (event.entidad !== 'ordenes-pago') return;
+
+    const orden = await this.ordenModel.findById(event.entidadId);
+    if (!orden) return;
+    if (orden.estado !== 'anulada') return; // idempotencia
+
+    orden.estado = 'esperando_aprobacion';
     await orden.save();
   }
 }

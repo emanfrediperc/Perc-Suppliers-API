@@ -1,9 +1,14 @@
-import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException, ForbiddenException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
 import { ConfigService } from '@nestjs/config';
 import { EventEmitter2 } from '@nestjs/event-emitter';
-import { APROBACION_RESUELTA, AprobacionResueltaEvent } from './events/aprobacion-resuelta.event';
+import {
+  APROBACION_RESUELTA,
+  AprobacionResueltaEvent,
+  APROBACION_REENVIADA,
+  AprobacionReenviadaEvent,
+} from './events/aprobacion-resuelta.event';
 import { Aprobacion, AprobacionDocument } from './schemas/aprobacion.schema';
 import { AprobacionTokenService } from './aprobacion-token.service';
 import { AprobacionTokenDocument } from './schemas/aprobacion-token.schema';
@@ -188,6 +193,21 @@ export class AprobacionService {
 
     await aprobacion.save();
 
+    // T038 — Auditar rechazo terminal: sólo cuando ya existió al menos un ciclo previo
+    // (es decir, la aprobación fue reenviada al menos una vez antes de este rechazo).
+    if (decision === 'rechazada' && (aprobacion.intentos?.length ?? 0) > 0) {
+      this.auditLogService.log({
+        usuario: user.userId,
+        usuarioEmail: user.email,
+        accion: 'rechazo-terminal',
+        entidad: 'aprobaciones',
+        entidadId: id,
+        cambios: { cicloNumero: (aprobacion.intentos.length + 1) },
+        ip: 'system',
+        descripcion: `Rechazo terminal tras ${aprobacion.intentos.length} ciclos`,
+      }).catch(() => {});
+    }
+
     // T020 — Emitir evento cuando la aprobación alcanza un estado terminal.
     // Los módulos upstream escuchan este evento para transicionar sus entidades.
     if (aprobacion.estado === 'aprobada' || aprobacion.estado === 'rechazada') {
@@ -251,6 +271,156 @@ export class AprobacionService {
       ip,
       descripcion: `${user.email} - decidir-via-token aprobaciones ${tokenDoc.aprobacionId}`,
     }).catch(() => {});
+
+    return aprobacion;
+  }
+
+  /**
+   * T031 — Reenvío tras rechazo.
+   * Solo quien creó la solicitud puede reenviarla (decisión a1).
+   * Solo una vez (decisión d3): reenviosRestantes arranca en 1 y se decrementa a 0.
+   * El ciclo anterior se snapshottea en intentos[] antes de resetear (decisión c1).
+   * Los tokens viejos se invalidan ANTES de emitir los nuevos (decisión b).
+   *
+   * NOTE: unit tests agregados en batch 7.
+   */
+  async reenviar(
+    aprobacionId: string,
+    user: { userId: string; email: string; nombre?: string },
+  ): Promise<AprobacionDocument> {
+    const aprobacion = await this.aprobacionModel.findById(aprobacionId);
+    if (!aprobacion) throw new NotFoundException('Aprobacion no encontrada');
+
+    // Validación 1: solo el creador puede reenviar (decisión a1)
+    if (aprobacion.createdBy !== user.userId) {
+      throw new ForbiddenException('Solo quien creó la solicitud puede reenviarla');
+    }
+
+    // Validación 2: solo se pueden reenviar aprobaciones rechazadas
+    if (aprobacion.estado !== 'rechazada') {
+      throw new BadRequestException(
+        `Solo se pueden reenviar aprobaciones rechazadas. Estado actual: ${aprobacion.estado}`,
+      );
+    }
+
+    // Validación 3: reenvíos restantes (decisión d3)
+    const reenviosRestantes = aprobacion.reenviosRestantes ?? 1;
+    if (reenviosRestantes <= 0) {
+      throw new BadRequestException('No quedan reenvíos disponibles para esta solicitud');
+    }
+
+    // Validación 4: debe haber al menos un aprobador activo
+    const aprobadoresActivos = await this.userModel.find({ role: 'aprobador', activo: true });
+    if (aprobadoresActivos.length === 0) {
+      throw new BadRequestException(
+        'No hay usuarios con rol aprobador activos. No se puede reenviar.',
+      );
+    }
+
+    // Snapshot del ciclo actual en intentos[] (decisión c1)
+    const intentoNumero = (aprobacion.intentos?.length ?? 0) + 1;
+    const fechaInicio = aprobacion.intentos?.length
+      ? aprobacion.fechaReenvio ?? (aprobacion as any).createdAt
+      : (aprobacion as any).createdAt;
+
+    aprobacion.intentos.push({
+      numero: intentoNumero,
+      aprobadores: [...aprobacion.aprobadores],
+      estadoFinal: 'rechazada',
+      fechaInicio,
+      fechaFin: new Date(),
+    } as any);
+
+    // Reset del ciclo para el nuevo intento
+    aprobacion.aprobadores = [];
+    aprobacion.estado = 'pendiente';
+    aprobacion.reenviosRestantes = reenviosRestantes - 1;
+    aprobacion.fechaReenvio = new Date();
+    aprobacion.reenviadoPor = user.userId;
+
+    await aprobacion.save();
+
+    // Seguridad: invalidar tokens del ciclo anterior ANTES de emitir los nuevos (decisión b)
+    await this.tokenService.invalidateAllForAprobacion(aprobacionId);
+
+    // Emitir nuevos tokens y enviar emails a todos los aprobadores activos
+    const magicLinkEnabled = this.nestConfigService.get<boolean>('magicLink.enabled');
+    if (magicLinkEnabled) {
+      const baseUrl =
+        this.nestConfigService.get<string>('magicLink.baseUrl') ??
+        'http://localhost:4200/aprobar';
+      const ttlHours = this.nestConfigService.get<number>('magicLink.ttlHours') ?? 48;
+
+      for (const aprobador of aprobadoresActivos) {
+        const aprobadorId = (aprobador._id as any).toString();
+        const rawToken = await this.tokenService.issueForAprobador(
+          aprobacionId,
+          aprobadorId,
+          aprobador.email,
+        );
+        const magicLink = `${baseUrl}?t=${encodeURIComponent(rawToken)}`;
+        const expiraEn = new Date(Date.now() + ttlHours * 3_600_000).toLocaleString('es-AR');
+
+        this.emailService
+          .sendAprobacionMagicLink(aprobador.email, {
+            tipo: aprobacion.tipo,
+            entidad: aprobacion.entidad,
+            descripcion: aprobacion.descripcion,
+            monto: aprobacion.monto,
+            solicitante: aprobacion.createdByEmail,
+            magicLink,
+            expiraEn,
+          })
+          .catch(() => {});
+
+        // T038 — Auditar emisión de token en el reenvío
+        this.auditLogService
+          .log({
+            usuario: aprobadorId,
+            usuarioEmail: aprobador.email,
+            accion: 'token-emitido-reenvio',
+            entidad: 'aprobaciones',
+            entidadId: aprobacionId,
+            cambios: { userEmail: aprobador.email, cicloNumero: intentoNumero + 1 },
+            ip: 'system',
+            descripcion: `Token magic-link emitido (reenvío) para aprobador ${aprobador.email}`,
+          })
+          .catch(() => {});
+      }
+    }
+
+    // Notificar a aprobadores in-app
+    await this.notifService.notifyUsersByRole(['aprobador'], {
+      tipo: 'aprobacion_reenviada',
+      titulo: 'Solicitud reenviada para aprobación',
+      mensaje: `${user.email} reenvió su solicitud de ${aprobacion.tipo} de ${aprobacion.entidad}`,
+      entidad: 'aprobaciones',
+      entidadId: aprobacionId,
+    });
+
+    // T038 — Auditar la acción de reenvío en sí
+    this.auditLogService
+      .log({
+        usuario: user.userId,
+        usuarioEmail: user.email,
+        accion: 'aprobacion-reenviada',
+        entidad: 'aprobaciones',
+        entidadId: aprobacionId,
+        cambios: {
+          reenviosRestantes: aprobacion.reenviosRestantes,
+          cicloNumero: intentoNumero + 1,
+        },
+        ip: 'system',
+        descripcion: `Aprobación reenviada por ${user.email} — ciclo ${intentoNumero + 1}`,
+      })
+      .catch(() => {});
+
+    // Emitir evento para que los módulos upstream transicionen rechazado → esperando_aprobacion
+    this.eventEmitter.emit(APROBACION_REENVIADA, {
+      aprobacionId,
+      entidad: aprobacion.entidad,
+      entidadId: aprobacion.entidadId,
+    } as AprobacionReenviadaEvent);
 
     return aprobacion;
   }

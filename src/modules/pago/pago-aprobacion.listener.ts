@@ -6,6 +6,8 @@ import { Pago, PagoDocument } from './schemas/pago.schema';
 import {
   APROBACION_RESUELTA,
   AprobacionResueltaEvent,
+  APROBACION_REENVIADA,
+  AprobacionReenviadaEvent,
 } from '../aprobacion/events/aprobacion-resuelta.event';
 
 @Injectable()
@@ -30,6 +32,20 @@ export class PagoAprobacionListener {
       pago.estado = 'anulado';
     }
 
+    await pago.save();
+  }
+
+  // T037 — Reenvío: transicionar anulado → esperando_aprobacion para el nuevo ciclo.
+  // Idempotente: solo actúa si el estado actual es 'anulado'.
+  @OnEvent(APROBACION_REENVIADA)
+  async handleReenviada(event: AprobacionReenviadaEvent): Promise<void> {
+    if (event.entidad !== 'pagos') return;
+
+    const pago = await this.pagoModel.findById(event.entidadId);
+    if (!pago) return;
+    if (pago.estado !== 'anulado') return; // idempotencia
+
+    pago.estado = 'esperando_aprobacion';
     await pago.save();
   }
 }
