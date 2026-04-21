@@ -1,16 +1,27 @@
 import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
+import { ConfigService } from '@nestjs/config';
 import { Aprobacion, AprobacionDocument } from './schemas/aprobacion.schema';
+import { AprobacionTokenService } from './aprobacion-token.service';
+import { AprobacionTokenDocument } from './schemas/aprobacion-token.schema';
 import { NotificacionService } from '../notificacion/notificacion.service';
 import { ConfiguracionService } from '../configuracion/configuracion.service';
+import { AuditLogService } from '../audit-log/audit-log.service';
+import { EmailService } from '../../integrations/email/email.service';
+import { User, UserDocument } from '../../auth/schemas/user.schema';
 
 @Injectable()
 export class AprobacionService {
   constructor(
     @InjectModel(Aprobacion.name) private aprobacionModel: Model<AprobacionDocument>,
+    @InjectModel(User.name) private userModel: Model<UserDocument>,
     private readonly notifService: NotificacionService,
     private readonly configService: ConfiguracionService,
+    private readonly nestConfigService: ConfigService,
+    private readonly tokenService: AprobacionTokenService,
+    private readonly auditLogService: AuditLogService,
+    private readonly emailService: EmailService,
   ) {}
 
   async requiresApproval(_monto: number): Promise<boolean> {
@@ -36,6 +47,14 @@ export class AprobacionService {
     createdByEmail: string;
     datosOperacion?: Record<string, any>;
   }): Promise<AprobacionDocument> {
+    // T011 — Verificar que existan aprobadores activos antes de crear la solicitud
+    const aprobadoresActivos = await this.userModel.find({ role: 'aprobador', activo: true });
+    if (aprobadoresActivos.length === 0) {
+      throw new BadRequestException(
+        'No hay usuarios con rol aprobador activos. No se puede crear la solicitud.',
+      );
+    }
+
     const aprobacionesRequeridas = await this.getRequiredApprovals(data.monto);
     const aprobacion = await this.aprobacionModel.create({
       ...data,
@@ -43,13 +62,57 @@ export class AprobacionService {
       aprobacionesRequeridas,
     });
 
-    await this.notifService.notifyUsersByRole(['admin', 'tesoreria'], {
+    // T011 — Notificar a los aprobadores (no a tesoreria)
+    await this.notifService.notifyUsersByRole(['aprobador'], {
       tipo: 'aprobacion_pendiente',
       titulo: 'Nueva aprobacion pendiente',
       mensaje: `${data.createdByEmail} solicita aprobacion para ${data.tipo} de ${data.entidad} - Monto: $${data.monto.toLocaleString('es-AR')}`,
       entidad: 'aprobaciones',
       entidadId: aprobacion._id.toString(),
     });
+
+    // T012 — Generar magic-link tokens y enviar emails a cada aprobador
+    const magicLinkEnabled = this.nestConfigService.get<boolean>('magicLink.enabled');
+    if (magicLinkEnabled) {
+      const baseUrl = this.nestConfigService.get<string>('magicLink.baseUrl') ?? 'http://localhost:4200/aprobar';
+      const ttlHours = this.nestConfigService.get<number>('magicLink.ttlHours') ?? 48;
+      const aprobacionId = aprobacion._id.toString();
+
+      for (const aprobador of aprobadoresActivos) {
+        const aprobadorId = (aprobador._id as any).toString();
+        const rawToken = await this.tokenService.issueForAprobador(
+          aprobacionId,
+          aprobadorId,
+          aprobador.email,
+        );
+
+        const magicLink = `${baseUrl}?t=${encodeURIComponent(rawToken)}`;
+        const expiraEn = new Date(Date.now() + ttlHours * 3_600_000).toLocaleString('es-AR');
+
+        // Enviar email (fire-and-forget; el token es la fuente de verdad)
+        this.emailService.sendAprobacionMagicLink(aprobador.email, {
+          tipo: data.tipo,
+          entidad: data.entidad,
+          descripcion: data.descripcion,
+          monto: data.monto,
+          solicitante: data.createdByEmail,
+          magicLink,
+          expiraEn,
+        }).catch(() => {});
+
+        // T021 — Auditar emisión del token
+        this.auditLogService.log({
+          usuario: aprobadorId,
+          usuarioEmail: aprobador.email,
+          accion: 'token-emitido',
+          entidad: 'aprobaciones',
+          entidadId: aprobacionId,
+          cambios: { userEmail: aprobador.email },
+          ip: 'system',
+          descripcion: `Token magic-link emitido para aprobador ${aprobador.email}`,
+        }).catch(() => {});
+      }
+    }
 
     return aprobacion;
   }
@@ -121,6 +184,58 @@ export class AprobacionService {
     }
 
     await aprobacion.save();
+    return aprobacion;
+  }
+
+  /**
+   * T015 — Procesa una decisión de aprobación via magic-link token (flujo sin JWT).
+   * El interceptor global de auditoría no corre aquí porque no hay request.user,
+   * por eso se llama manualmente a auditLogService.log.
+   */
+  async decidirViaToken(
+    rawToken: string,
+    decision: 'aprobar' | 'rechazar',
+    comentario: string | undefined,
+    ip: string,
+    userAgent: string,
+  ): Promise<AprobacionDocument> {
+    // Verificar token — lanza UnauthorizedException con mensaje genérico si es inválido
+    const tokenDoc: AprobacionTokenDocument = await this.tokenService.verify(rawToken);
+
+    // Resolver usuario desde el token
+    const user = await this.userModel.findById(tokenDoc.userId);
+    if (!user) {
+      throw new BadRequestException('Usuario asociado al token no encontrado');
+    }
+
+    const userId = (user._id as any).toString();
+
+    // Mapear decision del DTO al valor interno del dominio
+    const decisionInterna = decision === 'aprobar' ? 'aprobada' : 'rechazada';
+
+    // Delegar al método decidir existente (evita duplicar lógica de transición de estado)
+    const aprobacion = await this.decidir(
+      tokenDoc.aprobacionId,
+      { userId, email: user.email, nombre: user.nombre },
+      decisionInterna,
+      comentario,
+    );
+
+    // Consumir el token después de que la decisión fue registrada con éxito
+    await this.tokenService.consume(tokenDoc, ip, userAgent);
+
+    // T021 — Auditar consumo del token (el interceptor global no corre en rutas sin JWT)
+    this.auditLogService.log({
+      usuario: userId,
+      usuarioEmail: user.email,
+      accion: 'decidir-via-token',
+      entidad: 'aprobaciones',
+      entidadId: tokenDoc.aprobacionId,
+      cambios: { decision: decisionInterna, comentario: comentario ?? '' },
+      ip,
+      descripcion: `${user.email} - decidir-via-token aprobaciones ${tokenDoc.aprobacionId}`,
+    }).catch(() => {});
+
     return aprobacion;
   }
 
