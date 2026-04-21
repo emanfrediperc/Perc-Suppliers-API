@@ -1,5 +1,5 @@
 import { randomBytes } from 'crypto';
-import { Injectable, UnauthorizedException, ConflictException, NotFoundException } from '@nestjs/common';
+import { Injectable, UnauthorizedException, ConflictException, NotFoundException, BadRequestException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { JwtService } from '@nestjs/jwt';
 import { Model } from 'mongoose';
@@ -108,6 +108,8 @@ export class AuthService {
     if (!user) throw new NotFoundException('Usuario no encontrado');
     const valid = await bcrypt.compare(oldPassword, user.password);
     if (!valid) throw new UnauthorizedException('Contraseña actual incorrecta');
+    const isSamePassword = await bcrypt.compare(newPassword, user.password);
+    if (isSamePassword) throw new BadRequestException('La nueva contraseña no puede ser igual a la contraseña actual');
     user.password = await bcrypt.hash(newPassword, 10);
     user.mustChangePassword = false;
     user.tokenVersion = (user.tokenVersion || 0) + 1;
