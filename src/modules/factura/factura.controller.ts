@@ -28,15 +28,15 @@ export class FacturaController {
   ) {}
 
   @Post()
-  @Roles('admin', 'tesoreria', 'contabilidad')
+  @Roles('admin', 'tesoreria')
   create(@Body() dto: CreateFacturaDto) { return this.service.create(dto); }
 
   @Get()
-  @Roles('admin', 'tesoreria', 'contabilidad', 'consulta')
+  @Roles('admin', 'tesoreria', 'operador', 'consulta')
   findAll(@Query() query: FacturaQueryDto) { return this.service.findAll(query); }
 
   @Get('export')
-  @Roles('admin', 'tesoreria', 'contabilidad', 'consulta')
+  @Roles('admin', 'tesoreria', 'operador', 'consulta')
   async export(@Query() query: FacturaQueryDto, @Query('formato') formato: string, @Res() res: express.Response) {
     const bigQuery = { ...query, page: 1, limit: 10000 };
     const result = await this.service.findAll(bigQuery);
@@ -86,7 +86,7 @@ export class FacturaController {
   }
 
   @Post('import')
-  @Roles('admin', 'tesoreria', 'contabilidad')
+  @Roles('admin', 'tesoreria')
   @ApiConsumes('multipart/form-data')
   @UseInterceptors(FileInterceptor('archivo'))
   async importFacturas(@UploadedFile() file: Express.Multer.File) {
@@ -100,7 +100,7 @@ export class FacturaController {
   }
 
   @Post('upload')
-  @Roles('admin', 'tesoreria', 'contabilidad')
+  @Roles('admin', 'tesoreria')
   @ApiConsumes('multipart/form-data')
   @UseInterceptors(FileInterceptor('archivo'))
   async upload(@UploadedFile() file: Express.Multer.File) {
@@ -109,7 +109,7 @@ export class FacturaController {
   }
 
   @Post('ocr')
-  @Roles('admin', 'tesoreria', 'contabilidad')
+  @Roles('admin', 'tesoreria')
   @ApiConsumes('multipart/form-data')
   @UseInterceptors(FileInterceptor('archivo'))
   async ocr(@UploadedFile() file: Express.Multer.File) {
@@ -118,7 +118,7 @@ export class FacturaController {
   }
 
   @Get('check-duplicate')
-  @Roles('admin', 'tesoreria', 'contabilidad', 'consulta')
+  @Roles('admin', 'tesoreria', 'operador', 'consulta')
   checkDuplicate(
     @Query('numero') numero: string,
     @Query('empresaProveedora') empresaProveedora: string,
@@ -128,11 +128,11 @@ export class FacturaController {
   }
 
   @Get(':id')
-  @Roles('admin', 'tesoreria', 'contabilidad', 'consulta')
+  @Roles('admin', 'tesoreria', 'operador', 'consulta')
   findOne(@Param('id') id: string) { return this.service.findOne(id); }
 
   @Get(':id/preview')
-  @Roles('admin', 'tesoreria', 'contabilidad', 'consulta')
+  @Roles('admin', 'tesoreria', 'operador', 'consulta')
   async preview(@Param('id') id: string) {
     const factura = await this.service.findOne(id);
     if (!factura.archivoKey) throw new NotFoundException('La factura no tiene archivo adjunto');
@@ -141,7 +141,7 @@ export class FacturaController {
   }
 
   @Patch(':id')
-  @Roles('admin', 'tesoreria', 'contabilidad')
+  @Roles('admin', 'tesoreria')
   update(@Param('id') id: string, @Body() dto: UpdateFacturaDto) { return this.service.update(id, dto); }
 
   @Patch(':id/deactivate')
@@ -149,7 +149,7 @@ export class FacturaController {
   deactivate(@Param('id') id: string) { return this.service.deactivate(id); }
 
   @Post(':id/pagar')
-  @Roles('admin', 'tesoreria')
+  @Roles('admin', 'tesoreria', 'operador')
   pagar(@Param('id') id: string, @Body() dto: PagarFacturaDto) { return this.service.pagar(id, dto); }
 
   private validateFile(file: Express.Multer.File) {

@@ -25,11 +25,11 @@ export class ConvenioController {
   create(@Body() dto: CreateConvenioDto) { return this.service.create(dto); }
 
   @Get()
-  @Roles('admin', 'tesoreria', 'contabilidad', 'consulta')
+  @Roles('admin', 'tesoreria', 'operador', 'consulta')
   findAll(@Query() query: PaginationQueryDto) { return this.service.findAll(query); }
 
   @Get('export')
-  @Roles('admin', 'tesoreria', 'contabilidad', 'consulta')
+  @Roles('admin', 'tesoreria', 'operador', 'consulta')
   async export(@Query() query: PaginationQueryDto, @Query('formato') formato: string, @Res() res: express.Response) {
     const bigQuery = { ...query, page: 1, limit: 10000 };
     const result = await this.service.findAll(bigQuery);
@@ -59,7 +59,7 @@ export class ConvenioController {
   }
 
   @Get(':id')
-  @Roles('admin', 'tesoreria', 'contabilidad', 'consulta')
+  @Roles('admin', 'tesoreria', 'operador', 'consulta')
   findOne(@Param('id') id: string) { return this.service.findOne(id); }
 
   @Patch(':id')

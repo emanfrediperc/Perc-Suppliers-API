@@ -85,7 +85,7 @@ export class NotificacionService {
         createdAt: { $gte: new Date(now.getTime() - 24 * 60 * 60 * 1000) },
       });
       if (!existing) {
-        await this.notifyUsersByRole(['admin', 'tesoreria', 'contabilidad'], {
+        await this.notifyUsersByRole(['admin', 'tesoreria', 'operador'], {
           tipo: 'factura_por_vencer',
           titulo: 'Factura proxima a vencer',
           mensaje: `La factura ${f.numero} de ${proveedorNombre} vence el ${new Date(f.fechaVencimiento!).toLocaleDateString('es-AR')} - Saldo: $${f.saldoPendiente}`,

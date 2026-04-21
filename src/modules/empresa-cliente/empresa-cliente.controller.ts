@@ -27,11 +27,11 @@ export class EmpresaClienteController {
   create(@Body() dto: CreateEmpresaClienteDto) { return this.service.create(dto); }
 
   @Get()
-  @Roles('admin', 'tesoreria', 'contabilidad', 'consulta')
+  @Roles('admin', 'tesoreria', 'operador', 'consulta')
   findAll(@Query() query: PaginationQueryDto) { return this.service.findAll(query); }
 
   @Get('export')
-  @Roles('admin', 'tesoreria', 'contabilidad', 'consulta')
+  @Roles('admin', 'tesoreria', 'operador', 'consulta')
   async export(@Query() query: PaginationQueryDto, @Query('formato') formato: string, @Res() res: express.Response) {
     const bigQuery = { ...query, page: 1, limit: 10000 };
     const result = await this.service.findAll(bigQuery);
@@ -62,13 +62,13 @@ export class EmpresaClienteController {
   }
 
   @Get('consultar-cuit/:cuit')
-  @Roles('admin', 'tesoreria', 'contabilidad')
+  @Roles('admin', 'tesoreria', 'operador')
   consultarCuit(@Param('cuit') cuit: string) {
     return this.afipService.consultarCuit(cuit);
   }
 
   @Get(':id')
-  @Roles('admin', 'tesoreria', 'contabilidad', 'consulta')
+  @Roles('admin', 'tesoreria', 'operador', 'consulta')
   findOne(@Param('id') id: string) { return this.service.findOne(id); }
 
   @Patch(':id')

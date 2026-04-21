@@ -13,7 +13,7 @@ export class BusquedaController {
   constructor(private readonly service: BusquedaService) {}
 
   @Get()
-  @Roles('admin', 'tesoreria', 'contabilidad', 'consulta')
+  @Roles('admin', 'tesoreria', 'operador', 'consulta')
   search(
     @Query('q') query: string,
     @Query('limit') limit?: number,

@@ -82,7 +82,7 @@ export class OrdenPagoController {
   update(@Param('id') id: string, @Body() dto: UpdateOrdenPagoDto) { return this.service.update(id, dto); }
 
   @Post('pagar-lote')
-  @Roles('admin', 'tesoreria')
+  @Roles('admin', 'tesoreria', 'operador')
   pagarLote(@Body() dto: PagarLoteDto) { return this.service.pagarLote(dto.pagos); }
 
   @Patch(':id/deactivate')
@@ -90,7 +90,7 @@ export class OrdenPagoController {
   deactivate(@Param('id') id: string) { return this.service.deactivate(id); }
 
   @Post(':id/pagar')
-  @Roles('admin', 'tesoreria')
+  @Roles('admin', 'tesoreria', 'operador')
   pagar(@Param('id') id: string, @Body() dto: PagarOrdenDto) { return this.service.pagar(id, dto); }
 
   @Post('sync-finnegans')

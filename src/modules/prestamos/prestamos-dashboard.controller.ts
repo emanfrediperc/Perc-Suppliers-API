@@ -14,13 +14,13 @@ export class PrestamosDashboardController {
   constructor(private readonly service: PrestamosDashboardService) {}
 
   @Get('summary')
-  @Roles('admin', 'tesoreria', 'contabilidad', 'consulta')
+  @Roles('admin', 'tesoreria', 'operador', 'consulta')
   getSummary(@Query() filters: DashboardFilterDto) {
     return this.service.getSummary(filters);
   }
 
   @Get('net-position')
-  @Roles('admin', 'tesoreria', 'contabilidad', 'consulta')
+  @Roles('admin', 'tesoreria', 'operador', 'consulta')
   getNetPosition(@Query() filters: DashboardFilterDto) {
     return this.service.getNetPosition(filters);
   }

@@ -66,11 +66,11 @@ async function seed() {
     mustChangePassword: true,
   });
   await userModel.create({
-    email: 'contabilidad@perc.com',
+    email: 'operador@perc.com',
     password: hashedPassword,
     nombre: 'Carlos',
-    apellido: 'Contabilidad',
-    role: 'contabilidad',
+    apellido: 'Operador',
+    role: 'operador',
     mustChangePassword: true,
   });
   await userModel.create({
@@ -559,7 +559,7 @@ async function seed() {
 
   console.log('\n=== SEED COMPLETED ===');
   console.log('Data summary:');
-  console.log('  - 4 users (admin/tesoreria/contabilidad/consulta@perc.com / admin123)');
+  console.log('  - 4 users (admin/tesoreria/operador/consulta@perc.com / admin123)');
   console.log('  - 5 empresas proveedoras');
   console.log('  - 4 empresas clientes');
   console.log('  - 4 convenios (1 por proveedor max)');

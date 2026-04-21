@@ -7,6 +7,7 @@ import {
 import { CompraMonedaExtranjeraController } from './compra-moneda-extranjera.controller';
 import { CompraMonedaExtranjeraService } from './compra-moneda-extranjera.service';
 import { EmpresaClienteModule } from '../empresa-cliente/empresa-cliente.module';
+import { EmpresaProveedoraModule } from '../empresa-proveedora/empresa-proveedora.module';
 
 @Module({
   imports: [
@@ -14,6 +15,7 @@ import { EmpresaClienteModule } from '../empresa-cliente/empresa-cliente.module'
       { name: CompraMonedaExtranjera.name, schema: CompraMonedaExtranjeraSchema },
     ]),
     EmpresaClienteModule,
+    EmpresaProveedoraModule,
   ],
   controllers: [CompraMonedaExtranjeraController],
   providers: [CompraMonedaExtranjeraService],

@@ -38,20 +38,20 @@ export class PrestamosController {
   }
 
   @Get()
-  @Roles('admin', 'tesoreria', 'contabilidad', 'consulta')
+  @Roles('admin', 'tesoreria', 'operador', 'consulta')
   async findAll(@Query() query: QueryPrestamosDto) {
     const prestamos = await this.service.findAll(query);
     return prestamos.map((p) => this.enrichPrestamo(p));
   }
 
   @Get('empresas/search')
-  @Roles('admin', 'tesoreria', 'contabilidad', 'consulta')
+  @Roles('admin', 'tesoreria', 'operador', 'consulta')
   searchEmpresas(@Query('q') q: string) {
     return this.service.searchEmpresas(q);
   }
 
   @Get('export')
-  @Roles('admin', 'tesoreria', 'contabilidad', 'consulta')
+  @Roles('admin', 'tesoreria', 'operador', 'consulta')
   async export(@Query() query: QueryPrestamosDto, @Query('formato') formato: string, @Res() res: express.Response) {
     // Fetch the 3 datasets with the same filters
     const prestamos = await this.service.findAll(query);
@@ -149,7 +149,7 @@ export class PrestamosController {
   }
 
   @Get(':id')
-  @Roles('admin', 'tesoreria', 'contabilidad', 'consulta')
+  @Roles('admin', 'tesoreria', 'operador', 'consulta')
   async findOne(@Param('id') id: string) {
     const prestamo = await this.service.findOne(id);
     return this.enrichPrestamo(prestamo);
@@ -168,19 +168,19 @@ export class PrestamosController {
   }
 
   @Post(':id/clear')
-  @Roles('admin', 'tesoreria')
+  @Roles('admin', 'tesoreria', 'operador')
   clear(@Param('id') id: string) {
     return this.service.clear(id);
   }
 
   @Post(':id/renew')
-  @Roles('admin', 'tesoreria')
+  @Roles('admin', 'tesoreria', 'operador')
   renew(@Param('id') id: string, @Body() dto: RenewPrestamoDto) {
     return this.service.renew(id, dto);
   }
 
   @Delete(':id')
-  @Roles('admin')
+  @Roles('admin', 'tesoreria')
   remove(@Param('id') id: string) {
     return this.service.remove(id);
   }

@@ -3,41 +3,52 @@ import { Document, Types } from 'mongoose';
 import { ModalidadCompra } from '../enums/modalidad-compra.enum';
 import { EstadoCompraMonedaExtranjera } from '../enums/estado-compra.enum';
 
+export type EmpresaKind = 'cliente' | 'proveedora';
+
 @Schema({ _id: false })
-export class EmpresaClienteRef {
+export class EmpresaRef {
   @Prop({ type: Types.ObjectId, required: true })
   empresaId: Types.ObjectId;
+
+  @Prop({ type: String, enum: ['cliente', 'proveedora'], required: true })
+  empresaKind: EmpresaKind;
 
   @Prop({ required: true })
   razonSocialCache: string;
 }
 
-export const EmpresaClienteRefSchema = SchemaFactory.createForClass(EmpresaClienteRef);
+export const EmpresaRefSchema = SchemaFactory.createForClass(EmpresaRef);
 
 export type CompraMonedaExtranjeraDocument = CompraMonedaExtranjera & Document;
 
 @Schema({ timestamps: true, collection: 'compras_moneda_extranjera' })
 export class CompraMonedaExtranjera {
   @Prop({ required: true })
-  fecha: Date;
+  fechaSolicitada: Date;
+
+  @Prop()
+  fechaEstimadaEjecucion?: Date;
+
+  @Prop()
+  fechaEjecutada?: Date;
 
   @Prop({ type: String, enum: ModalidadCompra, required: true })
   modalidad: ModalidadCompra;
 
-  @Prop({ type: EmpresaClienteRefSchema, required: true })
-  empresaCliente: EmpresaClienteRef;
+  @Prop({ type: EmpresaRefSchema, required: true })
+  empresa: EmpresaRef;
 
   @Prop({ required: true, min: 0.01 })
   montoUSD: number;
 
-  @Prop({ required: true, min: 0.0001 })
-  tipoCambio: number;
+  @Prop({ min: 0.0001 })
+  tipoCambio?: number;
 
-  @Prop({ required: true, min: 0 })
-  montoARS: number;
+  @Prop({ min: 0 })
+  montoARS?: number;
 
-  @Prop({ required: true })
-  contraparte: string;
+  @Prop()
+  contraparte?: string;
 
   @Prop({ default: 0, min: 0 })
   comision: number;
@@ -48,7 +59,7 @@ export class CompraMonedaExtranjera {
   @Prop({
     type: String,
     enum: EstadoCompraMonedaExtranjera,
-    default: EstadoCompraMonedaExtranjera.CONFIRMADA,
+    default: EstadoCompraMonedaExtranjera.SOLICITADA,
   })
   estado: EstadoCompraMonedaExtranjera;
 
@@ -62,6 +73,12 @@ export class CompraMonedaExtranjera {
   creadoPor: Types.ObjectId;
 
   @Prop({ type: Types.ObjectId, ref: 'User' })
+  ejecutadoPor?: Types.ObjectId;
+
+  @Prop()
+  ejecutadoAt?: Date;
+
+  @Prop({ type: Types.ObjectId, ref: 'User' })
   anuladoPor?: Types.ObjectId;
 
   @Prop()
@@ -72,8 +89,8 @@ export const CompraMonedaExtranjeraSchema = SchemaFactory.createForClass(CompraM
 
 CompraMonedaExtranjeraSchema.set('optimisticConcurrency', true);
 
-CompraMonedaExtranjeraSchema.index({ fecha: -1 });
+CompraMonedaExtranjeraSchema.index({ fechaSolicitada: -1 });
 CompraMonedaExtranjeraSchema.index({ modalidad: 1 });
-CompraMonedaExtranjeraSchema.index({ 'empresaCliente.empresaId': 1 });
-CompraMonedaExtranjeraSchema.index({ 'empresaCliente.empresaId': 1, fecha: -1 });
+CompraMonedaExtranjeraSchema.index({ 'empresa.empresaId': 1 });
+CompraMonedaExtranjeraSchema.index({ 'empresa.empresaId': 1, fechaSolicitada: -1 });
 CompraMonedaExtranjeraSchema.index({ estado: 1 });

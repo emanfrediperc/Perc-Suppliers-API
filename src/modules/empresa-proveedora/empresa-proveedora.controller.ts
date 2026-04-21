@@ -27,14 +27,14 @@ export class EmpresaProveedoraController {
   create(@Body() dto: CreateEmpresaProveedoraDto) { return this.service.create(dto); }
 
   @Get()
-  @Roles('admin', 'tesoreria', 'contabilidad', 'consulta')
+  @Roles('admin', 'tesoreria', 'operador', 'consulta')
   findAll(@Query() query: EmpresaProveedoraQueryDto) {
     const sinConvenio = query.sinConvenio === 'true';
     return this.service.findAll(query, sinConvenio);
   }
 
   @Get('export')
-  @Roles('admin', 'tesoreria', 'contabilidad')
+  @Roles('admin', 'tesoreria', 'operador')
   async export(@Query() query: EmpresaProveedoraQueryDto, @Query('formato') formato: string, @Res() res: express.Response) {
     const bigQuery = { ...query, page: 1, limit: 10000 };
     const result = await this.service.findAll(bigQuery, query.sinConvenio === 'true');
@@ -69,13 +69,13 @@ export class EmpresaProveedoraController {
   }
 
   @Get('consultar-cuit/:cuit')
-  @Roles('admin', 'tesoreria', 'contabilidad')
+  @Roles('admin', 'tesoreria', 'operador')
   consultarCuit(@Param('cuit') cuit: string) {
     return this.afipService.consultarCuit(cuit);
   }
 
   @Get(':id')
-  @Roles('admin', 'tesoreria', 'contabilidad')
+  @Roles('admin', 'tesoreria', 'operador')
   findOne(@Param('id') id: string) { return this.service.findOne(id); }
 
   @Patch(':id')

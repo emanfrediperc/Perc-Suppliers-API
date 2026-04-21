@@ -1,4 +1,5 @@
 export enum EstadoCompraMonedaExtranjera {
-  CONFIRMADA = 'CONFIRMADA',
+  SOLICITADA = 'SOLICITADA',
+  EJECUTADA = 'EJECUTADA',
   ANULADA = 'ANULADA',
 }
