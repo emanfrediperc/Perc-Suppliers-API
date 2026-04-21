@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Patch, Param, Body, Query, Res, UseGuards } from '@nestjs/common';
+import { Controller, Get, Post, Patch, Param, Body, Query, Res, Req, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import * as express from 'express';
 import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
@@ -24,7 +24,9 @@ export class OrdenPagoController {
 
   @Post()
   @Roles('admin', 'tesoreria')
-  create(@Body() dto: CreateOrdenPagoDto) { return this.service.create(dto); }
+  create(@Body() dto: CreateOrdenPagoDto, @Req() req: any) {
+    return this.service.create(dto, { userId: req.user.userId, email: req.user.email });
+  }
 
   @Get() findAll(@Query() query: OrdenPagoQueryDto) { return this.service.findAll(query); }
   @Get('export')

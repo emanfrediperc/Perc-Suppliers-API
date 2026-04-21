@@ -24,6 +24,7 @@ import { PrestamoStatus } from './enums/prestamo-status.enum';
 import { EmpresaKind } from './enums/empresa-kind.enum';
 import { calculateInterest } from './helpers/interest-calculator';
 import { escapeRegex } from '../../common/utils/escape-regex';
+import { AprobacionService } from '../aprobacion/aprobacion.service';
 
 export interface EmpresaSearchResult {
   id: string;
@@ -46,6 +47,7 @@ export class PrestamosService {
     private proveedoraModel: Model<EmpresaProveedoraDocument>,
     @InjectModel(EmpresaCliente.name) private clienteModel: Model<EmpresaClienteDocument>,
     @InjectConnection() private connection: Connection,
+    private readonly aprobacionService: AprobacionService,
   ) {}
 
   private async resolveEmpresaRef(ref: EmpresaRefDto): Promise<ResolvedEmpresaRef> {
@@ -94,7 +96,10 @@ export class PrestamosService {
     return prestamo;
   }
 
-  async create(dto: CreatePrestamoDto): Promise<PrestamoDocument> {
+  async create(
+    dto: CreatePrestamoDto,
+    currentUser: { userId: string; email: string },
+  ): Promise<PrestamoDocument> {
     this.assertDistinctEmpresas(dto.lender, dto.borrower);
 
     const startDate = new Date(dto.startDate);
@@ -111,20 +116,54 @@ export class PrestamosService {
     const formattedCapital = new Intl.NumberFormat('es-AR').format(dto.capital);
     const historyDetail = `Capital ${formattedCapital} · Tasa ${dto.rate}% · ${dto.vehicle}`;
 
-    const prestamo = new this.prestamoModel({
-      lender,
-      borrower,
-      currency: dto.currency,
-      capital: dto.capital,
-      rate: dto.rate,
-      startDate,
-      dueDate,
-      vehicle: dto.vehicle,
-      balanceCut: dto.balanceCut,
-      status: PrestamoStatus.ACTIVE,
-      history: [{ date: new Date(), action: 'Creado', detail: historyDetail }],
-    });
-    return prestamo.save();
+    // T018 — Transacción Mongoose: crear el préstamo y la solicitud de aprobación
+    // de forma atómica. Si no hay aprobadores activos, aprobacionService lanza
+    // BadRequestException y la transacción se aborta antes de persistir el préstamo.
+    // Nota: las escrituras de Notificacion, AuditLog y AprobacionToken en
+    // aprobacionService.createAprobacion ocurren fuera de esta sesión — son
+    // best-effort; el documento Aprobacion en sí sí participa en la transacción
+    // de su propio método (sin session), lo que es aceptable porque Aprobacion
+    // es la fuente de verdad del workflow.
+    const session = await this.connection.startSession();
+    try {
+      let createdPrestamo: PrestamoDocument;
+      await session.withTransaction(async () => {
+        [createdPrestamo] = await this.prestamoModel.create(
+          [
+            {
+              lender,
+              borrower,
+              currency: dto.currency,
+              capital: dto.capital,
+              rate: dto.rate,
+              startDate,
+              dueDate,
+              vehicle: dto.vehicle,
+              balanceCut: dto.balanceCut,
+              // Estado inicial: esperando aprobación
+              status: PrestamoStatus.ESPERANDO_APROBACION,
+              history: [{ date: new Date(), action: 'Creado', detail: historyDetail }],
+            },
+          ],
+          { session },
+        );
+
+        // Lanza BadRequestException si no hay aprobadores activos → aborta transacción
+        await this.aprobacionService.createAprobacion({
+          entidad: 'prestamos',
+          entidadId: createdPrestamo!._id.toString(),
+          tipo: 'creacion',
+          monto: dto.capital,
+          descripcion: `Préstamo ${lender.razonSocialCache} → ${borrower.razonSocialCache} por ${new Intl.NumberFormat('es-AR').format(dto.capital)} ${dto.currency}`,
+          createdBy: currentUser.userId,
+          createdByEmail: currentUser.email,
+          datosOperacion: { ...dto },
+        });
+      });
+      return createdPrestamo!;
+    } finally {
+      await session.endSession();
+    }
   }
 
   async update(id: string, dto: UpdatePrestamoDto): Promise<PrestamoDocument> {

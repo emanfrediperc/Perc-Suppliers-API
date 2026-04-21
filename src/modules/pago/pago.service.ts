@@ -1,6 +1,7 @@
 import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
 import { InjectModel, InjectConnection } from '@nestjs/mongoose';
 import { Model, Connection } from 'mongoose';
+import { AprobacionService } from '../aprobacion/aprobacion.service';
 import { Pago, PagoDocument } from './schemas/pago.schema';
 import { Factura, FacturaDocument } from '../factura/schemas/factura.schema';
 import { OrdenPago, OrdenPagoDocument } from '../orden-pago/schemas/orden-pago.schema';
@@ -16,9 +17,44 @@ export class PagoService {
     @InjectModel(Factura.name) private facturaModel: Model<FacturaDocument>,
     @InjectModel(OrdenPago.name) private ordenModel: Model<OrdenPagoDocument>,
     @InjectConnection() private connection: Connection,
+    private readonly aprobacionService: AprobacionService,
   ) {}
 
-  async create(dto: CreatePagoDto): Promise<PagoDocument> { return this.pagoModel.create(dto); }
+  async create(
+    dto: CreatePagoDto,
+    currentUser: { userId: string; email: string },
+  ): Promise<PagoDocument> {
+    // T017 — Transacción Mongoose: crear el pago y la solicitud de aprobación
+    // de forma atómica. Si no hay aprobadores activos, aprobacionService lanza
+    // BadRequestException y la transacción se aborta antes de persistir el pago.
+    // Nota: Notificacion, AuditLog y AprobacionToken en createAprobacion son
+    // best-effort y ocurren fuera de esta sesión.
+    const session = await this.connection.startSession();
+    try {
+      let createdPago: PagoDocument;
+      await session.withTransaction(async () => {
+        [createdPago] = await this.pagoModel.create(
+          [{ ...dto, estado: 'esperando_aprobacion' }],
+          { session },
+        );
+
+        // Lanza BadRequestException si no hay aprobadores activos → aborta transacción
+        await this.aprobacionService.createAprobacion({
+          entidad: 'pagos',
+          entidadId: createdPago!._id.toString(),
+          tipo: 'creacion',
+          monto: dto.montoBase,
+          descripcion: `Pago por ${new Intl.NumberFormat('es-AR').format(dto.montoBase)} ARS (${dto.medioPago})`,
+          createdBy: currentUser.userId,
+          createdByEmail: currentUser.email,
+          datosOperacion: { ...dto },
+        });
+      });
+      return createdPago!;
+    } finally {
+      await session.endSession();
+    }
+  }
 
   async findAll(query: PaginationQueryDto): Promise<PaginatedResponseDto<PagoDocument>> {
     const { page, limit, sortBy, sortOrder } = query;

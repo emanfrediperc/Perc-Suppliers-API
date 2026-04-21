@@ -2,6 +2,8 @@ import { Injectable, NotFoundException, BadRequestException } from '@nestjs/comm
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
 import { ConfigService } from '@nestjs/config';
+import { EventEmitter2 } from '@nestjs/event-emitter';
+import { APROBACION_RESUELTA, AprobacionResueltaEvent } from './events/aprobacion-resuelta.event';
 import { Aprobacion, AprobacionDocument } from './schemas/aprobacion.schema';
 import { AprobacionTokenService } from './aprobacion-token.service';
 import { AprobacionTokenDocument } from './schemas/aprobacion-token.schema';
@@ -22,6 +24,7 @@ export class AprobacionService {
     private readonly tokenService: AprobacionTokenService,
     private readonly auditLogService: AuditLogService,
     private readonly emailService: EmailService,
+    private readonly eventEmitter: EventEmitter2,
   ) {}
 
   async requiresApproval(_monto: number): Promise<boolean> {
@@ -184,6 +187,19 @@ export class AprobacionService {
     }
 
     await aprobacion.save();
+
+    // T020 — Emitir evento cuando la aprobación alcanza un estado terminal.
+    // Los módulos upstream escuchan este evento para transicionar sus entidades.
+    if (aprobacion.estado === 'aprobada' || aprobacion.estado === 'rechazada') {
+      const event: AprobacionResueltaEvent = {
+        aprobacionId: aprobacion._id.toString(),
+        entidad: aprobacion.entidad as AprobacionResueltaEvent['entidad'],
+        entidadId: aprobacion.entidadId,
+        estado: aprobacion.estado as 'aprobada' | 'rechazada',
+      };
+      this.eventEmitter.emit(APROBACION_RESUELTA, event);
+    }
+
     return aprobacion;
   }
 
