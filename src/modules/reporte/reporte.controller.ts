@@ -25,7 +25,7 @@ export class ReporteController {
   // ============ EXPORT ENDPOINTS (must be before base routes) ============
 
   @Get('pagos-por-periodo/export')
-  @Roles('admin', 'tesoreria', 'contabilidad', 'consulta')
+  @Roles('admin', 'tesoreria', 'operador', 'consulta')
   async exportPagosPorPeriodo(@Query() dto: ReporteQueryDto, @Res() res: express.Response) {
     const data = await this.service.getPagosPorPeriodo(dto);
     const columns: ExportColumn[] = [
@@ -55,7 +55,7 @@ export class ReporteController {
   }
 
   @Get('pagos-por-proveedor/export')
-  @Roles('admin', 'tesoreria', 'contabilidad', 'consulta')
+  @Roles('admin', 'tesoreria', 'operador', 'consulta')
   async exportPagosPorProveedor(@Query() dto: ReporteQueryDto, @Res() res: express.Response) {
     const data = await this.service.getPagosPorProveedor(dto);
     const columns: ExportColumn[] = [
@@ -78,7 +78,7 @@ export class ReporteController {
   }
 
   @Get('retenciones-acumuladas/export')
-  @Roles('admin', 'tesoreria', 'contabilidad', 'consulta')
+  @Roles('admin', 'tesoreria', 'operador', 'consulta')
   async exportRetencionesAcumuladas(@Query() dto: ReporteQueryDto, @Res() res: express.Response) {
     const data = await this.service.getRetencionesAcumuladas(dto);
     const columns: ExportColumn[] = [
@@ -107,7 +107,7 @@ export class ReporteController {
   }
 
   @Get('facturas-por-tipo/export')
-  @Roles('admin', 'tesoreria', 'contabilidad', 'consulta')
+  @Roles('admin', 'tesoreria', 'operador', 'consulta')
   async exportFacturasPorTipo(@Query() dto: ReporteQueryDto, @Res() res: express.Response) {
     const data = await this.service.getFacturasPorTipo(dto);
     const columns: ExportColumn[] = [
@@ -136,7 +136,7 @@ export class ReporteController {
    * using getEstadoCuentaCompleto for the rich data shape.
    */
   @Get('estado-cuenta-proveedor/export')
-  @Roles('admin', 'tesoreria', 'contabilidad')
+  @Roles('admin', 'tesoreria', 'operador')
   async exportEstadoCuenta(@Query() dto: ReporteQueryDto, @Res() res: express.Response) {
     if (!dto.empresaProveedora) {
       return res.status(400).json({ message: 'Falta el parámetro empresaProveedora' });
@@ -263,7 +263,7 @@ export class ReporteController {
   }
 
   @Get('comisiones-descuentos/export')
-  @Roles('admin', 'tesoreria', 'contabilidad', 'consulta')
+  @Roles('admin', 'tesoreria', 'operador', 'consulta')
   async exportComisionesDescuentos(@Query() dto: ReporteQueryDto, @Res() res: express.Response) {
     const data = await this.service.getComisionesDescuentos(dto);
     const columns: ExportColumn[] = [
@@ -286,7 +286,7 @@ export class ReporteController {
   }
 
   @Get('facturas-vencimiento/export')
-  @Roles('admin', 'tesoreria', 'contabilidad', 'consulta')
+  @Roles('admin', 'tesoreria', 'operador', 'consulta')
   async exportFacturasVencimiento(@Query() dto: ReporteQueryDto, @Res() res: express.Response) {
     const data = await this.service.getFacturasVencimiento(dto);
     const columns: ExportColumn[] = [
@@ -318,37 +318,37 @@ export class ReporteController {
   // ============ BASE REPORT ENDPOINTS ============
 
   @Get('pagos-por-periodo')
-  @Roles('admin', 'tesoreria', 'contabilidad', 'consulta')
+  @Roles('admin', 'tesoreria', 'operador', 'consulta')
   getPagosPorPeriodo(@Query() dto: ReporteQueryDto) { return this.service.getPagosPorPeriodo(dto); }
 
   @Get('pagos-por-proveedor')
-  @Roles('admin', 'tesoreria', 'contabilidad', 'consulta')
+  @Roles('admin', 'tesoreria', 'operador', 'consulta')
   getPagosPorProveedor(@Query() dto: ReporteQueryDto) { return this.service.getPagosPorProveedor(dto); }
 
   @Get('facturas-vencimiento')
-  @Roles('admin', 'tesoreria', 'contabilidad', 'consulta')
+  @Roles('admin', 'tesoreria', 'operador', 'consulta')
   getFacturasVencimiento(@Query() dto: ReporteQueryDto) { return this.service.getFacturasVencimiento(dto); }
 
   @Get('retenciones-acumuladas')
-  @Roles('admin', 'tesoreria', 'contabilidad', 'consulta')
+  @Roles('admin', 'tesoreria', 'operador', 'consulta')
   getRetencionesAcumuladas(@Query() dto: ReporteQueryDto) { return this.service.getRetencionesAcumuladas(dto); }
 
   @Get('comisiones-descuentos')
-  @Roles('admin', 'tesoreria', 'contabilidad', 'consulta')
+  @Roles('admin', 'tesoreria', 'operador', 'consulta')
   getComisionesDescuentos(@Query() dto: ReporteQueryDto) { return this.service.getComisionesDescuentos(dto); }
 
   @Get('estado-cuenta-proveedor')
-  @Roles('admin', 'tesoreria', 'contabilidad', 'consulta')
+  @Roles('admin', 'tesoreria', 'operador', 'consulta')
   getEstadoCuentaProveedor(@Query() dto: ReporteQueryDto) { return this.service.getEstadoCuentaProveedor(dto); }
 
   @Get('estado-cuenta-completo/:empresaProveedoraId')
-  @Roles('admin', 'tesoreria', 'contabilidad')
+  @Roles('admin', 'tesoreria', 'operador')
   getEstadoCuentaCompleto(@Param('empresaProveedoraId') empresaProveedoraId: string) {
     return this.service.getEstadoCuentaCompleto(empresaProveedoraId);
   }
 
   @Get('facturas-por-tipo')
-  @Roles('admin', 'tesoreria', 'contabilidad', 'consulta')
+  @Roles('admin', 'tesoreria', 'operador', 'consulta')
   getFacturasPorTipo(@Query() dto: ReporteQueryDto) { return this.service.getFacturasPorTipo(dto); }
 
   // ============ HELPERS ============

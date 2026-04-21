@@ -81,6 +81,10 @@ export class PrestamosService {
     if (query.balanceCut !== undefined) filter.balanceCut = query.balanceCut;
     if (query.lenderId) filter['lender.empresaId'] = new Types.ObjectId(query.lenderId);
     if (query.borrowerId) filter['borrower.empresaId'] = new Types.ObjectId(query.borrowerId);
+    if (query.empresaId) {
+      const oid = new Types.ObjectId(query.empresaId);
+      filter.$or = [{ 'lender.empresaId': oid }, { 'borrower.empresaId': oid }];
+    }
     return this.prestamoModel.find(filter).sort({ createdAt: -1 }).exec();
   }
 
@@ -269,8 +273,14 @@ export class PrestamosService {
   }
 
   async remove(id: string): Promise<void> {
-    const deleted = await this.prestamoModel.findByIdAndDelete(id).exec();
-    if (!deleted) throw new NotFoundException(`Prestamo ${id} no encontrado`);
+    const prestamo = await this.prestamoModel.findById(id).exec();
+    if (!prestamo) throw new NotFoundException(`Prestamo ${id} no encontrado`);
+    if (prestamo.status !== PrestamoStatus.ACTIVE) {
+      throw new ConflictException(
+        `No se puede eliminar un prestamo con estado ${prestamo.status}`,
+      );
+    }
+    await this.prestamoModel.findByIdAndDelete(id).exec();
   }
 
   async searchEmpresas(q: string): Promise<EmpresaSearchResult[]> {

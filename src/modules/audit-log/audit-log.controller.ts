@@ -65,7 +65,7 @@ export class AuditLogController {
   }
 
   @Get(':entidad/:entidadId')
-  @Roles('admin', 'tesoreria', 'contabilidad', 'consulta')
+  @Roles('admin', 'tesoreria', 'operador', 'consulta')
   findByEntity(@Param('entidad') entidad: string, @Param('entidadId') entidadId: string) {
     return this.service.findByEntity(entidad, entidadId);
   }

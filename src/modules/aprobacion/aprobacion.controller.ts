@@ -86,7 +86,7 @@ export class AprobacionController {
   }
 
   @Patch(':id/decidir')
-  @Roles('admin', 'tesoreria')
+  @Roles('admin', 'operador')
   decidir(
     @Param('id') id: string,
     @Body() dto: DecidirAprobacionDto,

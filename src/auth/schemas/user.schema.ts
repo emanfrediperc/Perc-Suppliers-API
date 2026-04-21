@@ -1,7 +1,7 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { Document } from 'mongoose';
 
-export const VALID_ROLES = ['admin', 'tesoreria', 'contabilidad', 'consulta'] as const;
+export const VALID_ROLES = ['admin', 'tesoreria', 'operador', 'consulta'] as const;
 export type UserRole = (typeof VALID_ROLES)[number];
 
 export type UserDocument = User & Document;

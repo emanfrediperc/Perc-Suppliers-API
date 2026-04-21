@@ -6,7 +6,7 @@ Backend NestJS 11 con MongoDB (Mongoose 9). Gestiona el ciclo de pagos a proveed
 
 - **Runtime**: Node 20.19.0, NestJS 11, TypeScript 5.7
 - **Database**: MongoDB 7 con Mongoose 9 (requiere replica set `rs0`)
-- **Auth**: Passport JWT + bcrypt, 4 roles (admin/tesoreria/contabilidad/consulta)
+- **Auth**: Passport JWT + bcrypt, 4 roles (admin/tesoreria/operador/consulta)
 - **Testing**: Jest 30, Supertest para e2e
 - **Linting**: ESLint 9 + Prettier 3
 

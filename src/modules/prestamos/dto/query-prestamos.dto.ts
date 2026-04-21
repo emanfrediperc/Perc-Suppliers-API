@@ -26,6 +26,14 @@ export class QueryPrestamosDto {
   @IsMongoId()
   borrowerId?: string;
 
+  @ApiPropertyOptional({
+    example: '65abc1234567890abcdef014',
+    description: 'Matchea préstamos donde la empresa está como acreedor o deudor',
+  })
+  @IsOptional()
+  @IsMongoId()
+  empresaId?: string;
+
   @ApiPropertyOptional({ enum: Vehicle })
   @IsOptional()
   @IsEnum(Vehicle)

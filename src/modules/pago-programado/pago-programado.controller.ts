@@ -76,6 +76,6 @@ export class PagoProgramadoController {
   findOne(@Param('id') id: string) { return this.service.findOne(id); }
 
   @Patch(':id/cancelar')
-  @Roles('admin', 'tesoreria')
+  @Roles('admin', 'tesoreria', 'operador')
   cancelar(@Param('id') id: string) { return this.service.cancelar(id); }
 }

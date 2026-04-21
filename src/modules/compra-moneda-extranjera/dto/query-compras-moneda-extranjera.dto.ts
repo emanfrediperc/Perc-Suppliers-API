@@ -18,7 +18,7 @@ export class QueryComprasMonedaExtranjeraDto {
   @ApiPropertyOptional({ example: '65abc1234567890abcdef012' })
   @IsOptional()
   @IsMongoId()
-  empresaClienteId?: string;
+  empresaId?: string;
 
   @ApiPropertyOptional({ example: '2026-01-01' })
   @IsOptional()

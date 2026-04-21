@@ -18,6 +18,8 @@ import { CompraMonedaExtranjeraService } from './compra-moneda-extranjera.servic
 import { CreateCompraMonedaExtranjeraDto } from './dto/create-compra-moneda-extranjera.dto';
 import { QueryComprasMonedaExtranjeraDto } from './dto/query-compras-moneda-extranjera.dto';
 import { AnularCompraMonedaExtranjeraDto } from './dto/anular-compra-moneda-extranjera.dto';
+import { EjecutarCompraMonedaExtranjeraDto } from './dto/ejecutar-compra-moneda-extranjera.dto';
+import { EstimarEjecucionCompraMonedaExtranjeraDto } from './dto/estimar-ejecucion-compra-moneda-extranjera.dto';
 
 @ApiTags('CompraMonedaExtranjera')
 @ApiBearerAuth()
@@ -27,13 +29,13 @@ export class CompraMonedaExtranjeraController {
   constructor(private readonly service: CompraMonedaExtranjeraService) {}
 
   @Get()
-  @Roles('admin', 'tesoreria', 'contabilidad', 'consulta')
+  @Roles('admin', 'tesoreria', 'operador', 'consulta')
   findAll(@Query() query: QueryComprasMonedaExtranjeraDto) {
     return this.service.findAll(query);
   }
 
   @Get(':id')
-  @Roles('admin', 'tesoreria', 'contabilidad', 'consulta')
+  @Roles('admin', 'tesoreria', 'operador', 'consulta')
   findOne(@Param('id') id: string) {
     return this.service.findOne(id);
   }
@@ -42,16 +44,35 @@ export class CompraMonedaExtranjeraController {
   @Roles('admin', 'tesoreria')
   @HttpCode(201)
   create(@Body() dto: CreateCompraMonedaExtranjeraDto, @Req() req: any) {
-    return this.service.create(dto, req.user.id);
+    return this.service.create(dto, req.user.userId);
   }
 
   @Patch(':id/anular')
-  @Roles('admin', 'tesoreria')
+  @Roles('admin', 'tesoreria', 'operador')
   anular(
     @Param('id') id: string,
     @Body() dto: AnularCompraMonedaExtranjeraDto,
     @Req() req: any,
   ) {
-    return this.service.anular(id, dto, req.user.id);
+    return this.service.anular(id, dto, req.user.userId);
+  }
+
+  @Patch(':id/ejecutar')
+  @Roles('admin', 'operador')
+  ejecutar(
+    @Param('id') id: string,
+    @Body() dto: EjecutarCompraMonedaExtranjeraDto,
+    @Req() req: any,
+  ) {
+    return this.service.ejecutar(id, dto, req.user.userId);
+  }
+
+  @Patch(':id/estimar-ejecucion')
+  @Roles('admin', 'operador')
+  estimarEjecucion(
+    @Param('id') id: string,
+    @Body() dto: EstimarEjecucionCompraMonedaExtranjeraDto,
+  ) {
+    return this.service.estimarEjecucion(id, dto);
   }
 }

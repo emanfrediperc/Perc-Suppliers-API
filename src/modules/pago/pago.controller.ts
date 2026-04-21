@@ -21,11 +21,11 @@ export class PagoController {
   create(@Body() dto: CreatePagoDto) { return this.service.create(dto); }
 
   @Get()
-  @Roles('admin', 'tesoreria', 'contabilidad', 'consulta')
+  @Roles('admin', 'tesoreria', 'operador', 'consulta')
   findAll(@Query() query: PaginationQueryDto) { return this.service.findAll(query); }
 
   @Get(':id/comprobante')
-  @Roles('admin', 'tesoreria', 'contabilidad', 'consulta')
+  @Roles('admin', 'tesoreria', 'operador', 'consulta')
   async comprobante(@Param('id') id: string, @Res() res: express.Response) {
     const buffer = await this.service.generateComprobante(id);
     res.setHeader('Content-Type', 'application/pdf');
@@ -34,7 +34,7 @@ export class PagoController {
   }
 
   @Get(':id')
-  @Roles('admin', 'tesoreria', 'contabilidad', 'consulta')
+  @Roles('admin', 'tesoreria', 'operador', 'consulta')
   findOne(@Param('id') id: string) { return this.service.findOne(id); }
 
   @Patch(':id')
@@ -42,6 +42,6 @@ export class PagoController {
   update(@Param('id') id: string, @Body() dto: UpdatePagoDto) { return this.service.update(id, dto); }
 
   @Patch(':id/anular')
-  @Roles('admin', 'tesoreria')
+  @Roles('admin', 'tesoreria', 'operador')
   anular(@Param('id') id: string) { return this.service.anular(id); }
 }
