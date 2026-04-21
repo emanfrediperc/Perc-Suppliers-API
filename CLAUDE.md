@@ -6,7 +6,7 @@ Backend NestJS 11 con MongoDB (Mongoose 9). Gestiona el ciclo de pagos a proveed
 
 - **Runtime**: Node 20.19.0, NestJS 11, TypeScript 5.7
 - **Database**: MongoDB 7 con Mongoose 9 (requiere replica set `rs0`)
-- **Auth**: Passport JWT + bcrypt, 4 roles (admin/tesoreria/operador/consulta)
+- **Auth**: Passport JWT + bcrypt, 5 roles (admin/tesoreria/aprobador/operador/consulta)
 - **Testing**: Jest 30, Supertest para e2e
 - **Linting**: ESLint 9 + Prettier 3
 
@@ -15,7 +15,7 @@ Backend NestJS 11 con MongoDB (Mongoose 9). Gestiona el ciclo de pagos a proveed
 ```bash
 npm run start:dev     # Dev con watch (puerto 3100)
 npm run build         # nest build -> dist/
-npm run seed          # Carga datos de prueba (4 usuarios, proveedores, facturas, etc.)
+npm run seed          # Carga datos de prueba (5 usuarios, proveedores, facturas, etc.)
 npm run test          # Jest unit tests
 npm run test:e2e      # Jest e2e tests
 npm run lint          # ESLint --fix

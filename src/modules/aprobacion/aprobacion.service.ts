@@ -13,9 +13,11 @@ export class AprobacionService {
     private readonly configService: ConfiguracionService,
   ) {}
 
-  async requiresApproval(monto: number): Promise<boolean> {
-    const config = await this.configService.getApprovalConfig();
-    return monto >= config.montoUmbral;
+  async requiresApproval(_monto: number): Promise<boolean> {
+    // Todas las operaciones requieren aprobación bajo el nuevo workflow.
+    // El parámetro monto se mantiene por compat con getRequiredApprovals
+    // y posible reintroducción del threshold en el futuro.
+    return true;
   }
 
   async getRequiredApprovals(monto: number): Promise<number> {
