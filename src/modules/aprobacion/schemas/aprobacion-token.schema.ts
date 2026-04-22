@@ -51,9 +51,8 @@ export class AprobacionToken {
 
 export const AprobacionTokenSchema = SchemaFactory.createForClass(AprobacionToken);
 
-// Lookup por hash (la vía principal de validación; unique: true ya crea el índice,
-// pero lo declaramos explícitamente para mayor claridad).
-AprobacionTokenSchema.index({ tokenHash: 1 }, { unique: true });
+// El índice único sobre tokenHash ya lo crea @Prop({ unique: true }) arriba.
+// No se declara acá para evitar el warning "Duplicate schema index".
 
 // Para invalidar tokens hermanos de un mismo aprobador en una aprobación.
 AprobacionTokenSchema.index({ aprobacionId: 1, userId: 1 });

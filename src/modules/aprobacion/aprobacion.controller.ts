@@ -1,4 +1,4 @@
-import { Controller, Get, Patch, Param, Body, Query, Res, UseGuards } from '@nestjs/common';
+import { Controller, Get, Patch, Post, Param, Body, Query, Res, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
 import * as express from 'express';
 import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
@@ -120,5 +120,26 @@ export class AprobacionController {
     @CurrentUser() user: any,
   ) {
     return this.service.decidir(id, { userId: user.userId, email: user.email }, dto.decision, dto.comentario);
+  }
+
+  /**
+   * Reenvía el mail magic-link a los aprobadores activos sin avanzar el
+   * ciclo. Usado cuando el mail original no llegó (spam, SMTP transient).
+   * No confundir con :id/reenviar que reinicia el ciclo tras un rechazo.
+   */
+  @Post(':id/reenviar-mail')
+  @Roles('admin', 'aprobador', 'tesoreria')
+  @ApiOperation({
+    summary: 'Reenviar el mail magic-link a los aprobadores (aprobación pendiente)',
+    description:
+      'Invalida los tokens pendientes de cada aprobador activo, emite nuevos tokens y ' +
+      'reenvía los emails. Solo funciona si la aprobación está en estado pendiente y si ' +
+      'ENABLE_MAGIC_LINK=true.',
+  })
+  @ApiResponse({ status: 200, description: 'Mail reenviado', schema: { example: { mensaje: 'Mail reenviado a los aprobadores', destinatarios: 2 } } })
+  @ApiResponse({ status: 400, description: 'Estado inválido, sin aprobadores, o flag deshabilitado' })
+  @ApiResponse({ status: 404, description: 'Aprobación no encontrada' })
+  reenviarMail(@Param('id') id: string, @CurrentUser() user: any) {
+    return this.service.resendMagicLinks(id, { userId: user.userId, email: user.email });
   }
 }

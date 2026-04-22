@@ -433,6 +433,81 @@ export class AprobacionService {
   }
 
   /**
+   * Re-emite tokens magic-link y reenvía los emails a todos los aprobadores
+   * activos, SIN avanzar el ciclo. Útil cuando el mail original no llegó
+   * (spam, SMTP transient, etc.). La aprobación debe estar en estado
+   * 'pendiente'. No confundir con reenviar(): aquel resetea el ciclo
+   * después de un rechazo; este solo redispara los mails.
+   */
+  async resendMagicLinks(
+    aprobacionId: string,
+    user: { userId: string; email: string },
+  ): Promise<{ mensaje: string; destinatarios: number }> {
+    const aprobacion = await this.aprobacionModel.findById(aprobacionId);
+    if (!aprobacion) throw new NotFoundException('Aprobacion no encontrada');
+
+    if (aprobacion.estado !== 'pendiente') {
+      throw new BadRequestException(
+        `Solo se puede reenviar el mail mientras la aprobación está pendiente. Estado actual: ${aprobacion.estado}`,
+      );
+    }
+
+    const magicLinkEnabled = this.nestConfigService.get<boolean>('magicLink.enabled');
+    if (!magicLinkEnabled) {
+      throw new BadRequestException(
+        'El flujo de magic link está deshabilitado (ENABLE_MAGIC_LINK=false). Contactar al admin.',
+      );
+    }
+
+    const aprobadoresActivos = await this.userModel.find({ role: 'aprobador', activo: true });
+    if (aprobadoresActivos.length === 0) {
+      throw new BadRequestException('No hay usuarios con rol aprobador activos.');
+    }
+
+    const baseUrl = this.nestConfigService.get<string>('magicLink.baseUrl') ?? 'http://localhost:4200/aprobar';
+    const ttlHours = this.nestConfigService.get<number>('magicLink.ttlHours') ?? 48;
+
+    for (const aprobador of aprobadoresActivos) {
+      const aprobadorId = (aprobador._id as any).toString();
+      // issueForAprobador invalida tokens previos del par antes de emitir uno nuevo
+      const rawToken = await this.tokenService.issueForAprobador(
+        aprobacionId,
+        aprobadorId,
+        aprobador.email,
+      );
+
+      const magicLink = `${baseUrl}?t=${encodeURIComponent(rawToken)}`;
+      const expiraEn = new Date(Date.now() + ttlHours * 3_600_000).toLocaleString('es-AR');
+
+      this.emailService.sendAprobacionMagicLink(aprobador.email, {
+        tipo: aprobacion.tipo,
+        entidad: aprobacion.entidad,
+        descripcion: aprobacion.descripcion,
+        monto: aprobacion.monto,
+        solicitante: aprobacion.createdByEmail,
+        magicLink,
+        expiraEn,
+      }).catch(() => {});
+
+      this.auditLogService.log({
+        usuario: aprobadorId,
+        usuarioEmail: aprobador.email,
+        accion: 'token-emitido',
+        entidad: 'aprobaciones',
+        entidadId: aprobacionId,
+        cambios: { userEmail: aprobador.email, motivo: 'reenvio-mail-manual' },
+        ip: 'system',
+        descripcion: `Mail magic-link reenviado manualmente por ${user.email} a ${aprobador.email}`,
+      }).catch(() => {});
+    }
+
+    return {
+      mensaje: 'Mail reenviado a los aprobadores',
+      destinatarios: aprobadoresActivos.length,
+    };
+  }
+
+  /**
    * FR-12, FR-14, AD-7 — Obtiene el contexto de una aprobación a partir de un magic-link token.
    * Completamente idempotente: NO escribe en la DB. Puede llamarse N veces sin efectos.
    * Lanza UnauthorizedException genérico en cualquier caso inválido (token, aprobación no pendiente).
