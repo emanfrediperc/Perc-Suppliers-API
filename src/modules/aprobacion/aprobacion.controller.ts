@@ -20,13 +20,13 @@ export class AprobacionController {
   ) {}
 
   @Get('pendientes')
-  @Roles('aprobador')
+  @Roles('admin', 'aprobador')
   findPendientes() {
     return this.service.findPendientes();
   }
 
   @Get('count')
-  @Roles('aprobador')
+  @Roles('admin', 'aprobador')
   countPendientes() {
     return this.service.countPendientes();
   }
