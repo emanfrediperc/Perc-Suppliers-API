@@ -20,13 +20,13 @@ export class AprobacionController {
   ) {}
 
   @Get('pendientes')
-  @Roles('admin', 'aprobador')
+  @Roles('aprobador')
   findPendientes() {
     return this.service.findPendientes();
   }
 
   @Get('count')
-  @Roles('admin', 'aprobador')
+  @Roles('aprobador')
   countPendientes() {
     return this.service.countPendientes();
   }
@@ -113,7 +113,7 @@ export class AprobacionController {
   }
 
   @Patch(':id/decidir')
-  @Roles('admin', 'aprobador')
+  @Roles('aprobador')
   decidir(
     @Param('id') id: string,
     @Body() dto: DecidirAprobacionDto,
