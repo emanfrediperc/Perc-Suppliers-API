@@ -152,55 +152,132 @@ export class EmailService {
     },
   ): Promise<boolean> {
     const montoFormateado = `$${data.monto.toLocaleString('es-AR', { minimumFractionDigits: 2 })}`;
-    const html = `
-      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-        <h2 style="color: #333;">Aprobación pendiente</h2>
-        <p>Tenés una solicitud de aprobación pendiente que requiere tu acción.</p>
+    const entidadLabel = this.formatEntidadLabel(data.entidad);
+    const tipoLabel = this.formatTipoLabel(data.tipo);
+    const aprobarUrl = `${this.escapeHtml(data.magicLink)}&decision=aprobar`;
+    const rechazarUrl = `${this.escapeHtml(data.magicLink)}&decision=rechazar`;
 
-        <table style="width: 100%; border-collapse: collapse; margin: 16px 0;">
+    const html = `<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Aprobación pendiente</title>
+</head>
+<body style="margin: 0; padding: 0; background: #f4f5f8; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; color: #1f2937;">
+  <!-- Preheader (texto preview en la lista del inbox) -->
+  <div style="display: none; max-height: 0; overflow: hidden;">
+    ${this.escapeHtml(tipoLabel)} de ${this.escapeHtml(entidadLabel)} por ${this.escapeHtml(montoFormateado)} esperando tu aprobación.
+  </div>
+
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background: #f4f5f8; padding: 32px 16px;">
+    <tr>
+      <td align="center">
+        <table role="presentation" width="560" cellpadding="0" cellspacing="0" border="0" style="max-width: 560px; width: 100%; background: #ffffff; border-radius: 16px; overflow: hidden; box-shadow: 0 4px 24px rgba(15, 23, 42, 0.06);">
+          <!-- Header -->
           <tr>
-            <td style="padding: 8px; font-weight: bold; width: 40%;">Operación:</td>
-            <td style="padding: 8px;">${this.escapeHtml(data.tipo)}</td>
+            <td style="background: linear-gradient(135deg, #6366f1 0%, #4f46e5 100%); padding: 28px 32px;">
+              <div style="color: rgba(255,255,255,0.82); font-size: 12px; font-weight: 600; letter-spacing: 1px; text-transform: uppercase; margin-bottom: 6px;">Perc Suppliers</div>
+              <div style="color: #ffffff; font-size: 22px; font-weight: 700; line-height: 1.2;">Aprobación pendiente</div>
+            </td>
           </tr>
-          <tr style="background: #f9f9f9;">
-            <td style="padding: 8px; font-weight: bold;">Entidad:</td>
-            <td style="padding: 8px;">${this.escapeHtml(data.entidad)}</td>
-          </tr>
+
+          <!-- Intro + monto destacado -->
           <tr>
-            <td style="padding: 8px; font-weight: bold;">Descripción:</td>
-            <td style="padding: 8px;">${this.escapeHtml(data.descripcion)}</td>
+            <td style="padding: 28px 32px 8px;">
+              <p style="margin: 0 0 20px; font-size: 15px; line-height: 1.55; color: #374151;">
+                Hay una solicitud de <strong>${this.escapeHtml(tipoLabel)}</strong> esperando tu decisión.
+              </p>
+              <div style="background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 12px; padding: 18px 20px; text-align: center;">
+                <div style="color: #6b7280; font-size: 11px; font-weight: 600; letter-spacing: 0.8px; text-transform: uppercase; margin-bottom: 4px;">Monto</div>
+                <div style="color: #111827; font-size: 30px; font-weight: 700; line-height: 1.1;">${this.escapeHtml(montoFormateado)}</div>
+              </div>
+            </td>
           </tr>
-          <tr style="background: #f9f9f9;">
-            <td style="padding: 8px; font-weight: bold;">Monto:</td>
-            <td style="padding: 8px;"><strong>${this.escapeHtml(montoFormateado)}</strong></td>
-          </tr>
+
+          <!-- Detalle -->
           <tr>
-            <td style="padding: 8px; font-weight: bold;">Solicitado por:</td>
-            <td style="padding: 8px;">${this.escapeHtml(data.solicitante)}</td>
+            <td style="padding: 20px 32px 4px;">
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="font-size: 14px;">
+                <tr>
+                  <td style="padding: 10px 0; color: #6b7280; width: 130px;">Tipo</td>
+                  <td style="padding: 10px 0; color: #111827; font-weight: 500;">${this.escapeHtml(tipoLabel)}</td>
+                </tr>
+                <tr>
+                  <td style="padding: 10px 0; color: #6b7280; border-top: 1px solid #f3f4f6;">Entidad</td>
+                  <td style="padding: 10px 0; color: #111827; font-weight: 500; border-top: 1px solid #f3f4f6;">${this.escapeHtml(entidadLabel)}</td>
+                </tr>
+                <tr>
+                  <td style="padding: 10px 0; color: #6b7280; border-top: 1px solid #f3f4f6; vertical-align: top;">Descripción</td>
+                  <td style="padding: 10px 0; color: #111827; font-weight: 500; border-top: 1px solid #f3f4f6;">${this.escapeHtml(data.descripcion)}</td>
+                </tr>
+                <tr>
+                  <td style="padding: 10px 0; color: #6b7280; border-top: 1px solid #f3f4f6;">Solicitante</td>
+                  <td style="padding: 10px 0; color: #111827; font-weight: 500; border-top: 1px solid #f3f4f6;">${this.escapeHtml(data.solicitante)}</td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+
+          <!-- CTAs -->
+          <tr>
+            <td style="padding: 28px 32px 8px;" align="center">
+              <table role="presentation" cellpadding="0" cellspacing="0" border="0">
+                <tr>
+                  <td style="padding-right: 10px;">
+                    <a href="${aprobarUrl}" style="display: inline-block; background: #16a34a; color: #ffffff; padding: 13px 28px; border-radius: 10px; text-decoration: none; font-size: 15px; font-weight: 600; box-shadow: 0 2px 6px rgba(22, 163, 74, 0.35);">Aprobar</a>
+                  </td>
+                  <td style="padding-left: 10px;">
+                    <a href="${rechazarUrl}" style="display: inline-block; background: #ffffff; color: #dc2626; padding: 13px 28px; border: 1px solid #fecaca; border-radius: 10px; text-decoration: none; font-size: 15px; font-weight: 600;">Rechazar</a>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+
+          <!-- Nota -->
+          <tr>
+            <td style="padding: 16px 32px 28px;">
+              <p style="margin: 0; color: #6b7280; font-size: 12px; line-height: 1.5; text-align: center;">
+                El link expira el <strong style="color: #374151;">${this.escapeHtml(data.expiraEn)}</strong>. Podés decidir también desde la app.
+              </p>
+            </td>
           </tr>
         </table>
 
-        <p style="margin: 24px 0 8px;">Usá los botones a continuación para registrar tu decisión:</p>
+        <!-- Footer -->
+        <table role="presentation" width="560" cellpadding="0" cellspacing="0" border="0" style="max-width: 560px; width: 100%; margin-top: 20px;">
+          <tr>
+            <td style="padding: 0 8px; text-align: center; color: #9ca3af; font-size: 11px; line-height: 1.5;">
+              Si no esperabas este correo, podés ignorarlo — la solicitud no se aprobará sin tu acción.<br>
+              Perc Suppliers · Aprobaciones
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>`;
+    return this.sendEmail(to, `Aprobación pendiente · ${entidadLabel} · ${montoFormateado}`, html);
+  }
 
-        <div style="text-align: center; margin: 24px 0;">
-          <a href="${this.escapeHtml(data.magicLink)}&decision=aprobar"
-             style="display: inline-block; background-color: #28a745; color: #fff; padding: 12px 32px;
-                    border-radius: 4px; text-decoration: none; font-size: 16px; margin-right: 16px;">
-            Aprobar
-          </a>
-          <a href="${this.escapeHtml(data.magicLink)}&decision=rechazar"
-             style="display: inline-block; background-color: #dc3545; color: #fff; padding: 12px 32px;
-                    border-radius: 4px; text-decoration: none; font-size: 16px;">
-            Rechazar
-          </a>
-        </div>
+  private formatEntidadLabel(entidad: string): string {
+    const map: Record<string, string> = {
+      'ordenes-pago': 'Orden de Pago',
+      'pagos': 'Pago',
+      'prestamos': 'Préstamo',
+      'compras-fx': 'Compra FX',
+    };
+    return map[entidad] ?? entidad;
+  }
 
-        <p style="color: #666; font-size: 13px;">
-          Este link expira el <strong>${this.escapeHtml(data.expiraEn)}</strong>.
-          Si no solicitaste esta notificación, podés ignorar este email.
-        </p>
-      </div>
-    `;
-    return this.sendEmail(to, `Aprobación pendiente - ${data.entidad}`, html);
+  private formatTipoLabel(tipo: string): string {
+    const map: Record<string, string> = {
+      'creacion': 'Creación',
+      'pago': 'Pago',
+      'anulacion': 'Anulación',
+    };
+    return map[tipo] ?? tipo;
   }
 }
