@@ -32,7 +32,7 @@ export class AprobacionController {
   }
 
   @Get('export')
-  @Roles('admin', 'tesoreria')
+  @Roles('admin', 'tesoreria', 'aprobador')
   async export(@Query('formato') formato: string, @Res() res: express.Response) {
     const data = await this.service.findAll();
     const columns: ExportColumn[] = [

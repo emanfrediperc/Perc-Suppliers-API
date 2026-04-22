@@ -1,12 +1,14 @@
 import {
   Controller,
+  Get,
   Post,
   Body,
+  Param,
   Req,
   ServiceUnavailableException,
   UnauthorizedException,
 } from '@nestjs/common';
-import { ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
+import { ApiOperation, ApiResponse, ApiTags, ApiParam } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
 import { Request } from 'express';
 import { ConfigService } from '@nestjs/config';
@@ -26,6 +28,47 @@ export class AprobacionPublicController {
     private readonly service: AprobacionService,
     private readonly configService: ConfigService,
   ) {}
+
+  @Get('contexto-token/:token')
+  @Throttle({ default: { ttl: 60_000, limit: 10 } })
+  @ApiOperation({
+    summary: 'Obtener contexto de una aprobación desde un magic-link token (público, read-only)',
+    description:
+      'Valida el token y devuelve el contexto necesario para mostrar la página de confirmación en el frontend. ' +
+      'NO modifica ningún estado — es completamente idempotente. ' +
+      'Rate-limited a 10 req/min por IP. Devuelve 503 si ENABLE_MAGIC_LINK=false.',
+  })
+  @ApiParam({ name: 'token', description: 'Raw magic-link token (base64url)' })
+  @ApiResponse({
+    status: 200,
+    description: 'Contexto de la aprobación',
+    schema: {
+      example: {
+        tipo: 'creacion',
+        entidad: 'prestamos',
+        descripcion: 'Préstamo a XYZ por $10.000',
+        monto: 10000,
+        solicitante: 'tesoreria@perc.com',
+        fechaSolicitud: '2026-04-21T10:00:00Z',
+        expiraEn: '2026-04-23T10:00:00Z',
+        aprobadorEmail: 'aprobador@perc.com',
+      },
+    },
+  })
+  @ApiResponse({ status: 401, description: 'Token inválido o expirado (mensaje genérico)' })
+  @ApiResponse({ status: 429, description: 'Rate limit excedido' })
+  @ApiResponse({ status: 503, description: 'Funcionalidad deshabilitada' })
+  async contextoToken(@Param('token') token: string) {
+    if (this.configService.get<boolean>('magicLink.enabled') !== true) {
+      throw new ServiceUnavailableException('Funcionalidad deshabilitada');
+    }
+
+    try {
+      return await this.service.getContextoToken(token);
+    } catch {
+      throw new UnauthorizedException('Token inválido o expirado');
+    }
+  }
 
   @Post('decidir-via-token')
   @Throttle({ default: { ttl: 60_000, limit: 10 } })

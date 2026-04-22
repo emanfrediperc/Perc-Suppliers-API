@@ -1,7 +1,7 @@
 /**
  * E2E — Aprobación Magic Link
  *
- * Cubre: T022, T023, T024, T025, T026, T027, T039, T040, T041, T042, T043
+ * Cubre: T022, T023, T024, T025, T026, T027, T039, T040, T041, T042, T043, T044
  *
  * REQUISITOS DE ENTORNO:
  *   - MongoDB corriendo como replica set (rs0) en localhost:27017
@@ -554,6 +554,115 @@ describe('T027 — Rate limit: 11 requests/min al endpoint público → la 11ª 
     // Los primeros 10 deben ser 401 (token inválido), el 11º debe ser 429
     const last = responses[responses.length - 1];
     expect(last).toBe(429);
+  });
+});
+
+// ─── T044 — Contexto via token (Scenarios 3 & 17) ────────────────────────────
+
+describe('T044 — Contexto via token (GET contexto-token/:token)', () => {
+  let ctx: AppContext;
+
+  beforeAll(async () => {
+    ctx = await setupContext('t044');
+  });
+
+  afterAll(async () => {
+    await ctx.app.close();
+  });
+
+  // Scenario 3: GET con token válido devuelve 200 con la forma correcta y NO consume el token
+  it('Scenario 3 — devuelve 200 con el contexto de la aprobación para un token válido', async () => {
+    const { rawToken } = await crearPrestamoConAprobacion(ctx);
+
+    const res = await request(ctx.app.getHttpServer())
+      .get(`/api/v1/aprobaciones/contexto-token/${encodeURIComponent(rawToken)}`)
+      .expect(200);
+
+    expect(res.body).toMatchObject({
+      tipo: expect.any(String),
+      entidad: 'prestamos',
+      descripcion: expect.any(String),
+      monto: expect.any(Number),
+      solicitante: expect.any(String),
+      aprobadorEmail: expect.stringContaining('@'),
+    });
+    expect(res.body.expiraEn).toBeDefined();
+    expect(res.body.fechaSolicitud).toBeDefined();
+  });
+
+  // Scenario 3 (continuación): el token sigue siendo válido para decidir después del GET
+  it('Scenario 3 — el token sigue siendo válido para decidir-via-token después del GET', async () => {
+    const { rawToken } = await crearPrestamoConAprobacion(ctx);
+
+    // GET contexto — no debe consumir el token
+    await request(ctx.app.getHttpServer())
+      .get(`/api/v1/aprobaciones/contexto-token/${encodeURIComponent(rawToken)}`)
+      .expect(200);
+
+    // Ahora decidir con el mismo token — debe funcionar
+    const decisionRes = await request(ctx.app.getHttpServer())
+      .post('/api/v1/aprobaciones/decidir-via-token')
+      .send({ token: rawToken, decision: 'aprobar' })
+      .expect(200);
+
+    expect(decisionRes.body.estadoAprobacion).toBe('aprobada');
+  });
+
+  // Scenario 17: N GETs consecutivos no consumen ni invalidan el token
+  it('Scenario 17 — múltiples GETs son idempotentes y el token sigue siendo usable', async () => {
+    const { rawToken } = await crearPrestamoConAprobacion(ctx);
+
+    // 5 llamadas consecutivas al endpoint de contexto
+    for (let i = 0; i < 5; i++) {
+      await request(ctx.app.getHttpServer())
+        .get(`/api/v1/aprobaciones/contexto-token/${encodeURIComponent(rawToken)}`)
+        .expect(200);
+    }
+
+    // El token sigue siendo consumible para decidir
+    const finalRes = await request(ctx.app.getHttpServer())
+      .post('/api/v1/aprobaciones/decidir-via-token')
+      .send({ token: rawToken, decision: 'aprobar' })
+      .expect(200);
+
+    expect(finalRes.body.estadoAprobacion).toBe('aprobada');
+  });
+
+  it('devuelve 401 genérico para un token basura', async () => {
+    const res = await request(ctx.app.getHttpServer())
+      .get('/api/v1/aprobaciones/contexto-token/token-invalido-basura')
+      .expect(401);
+
+    expect(res.body.message).toBe('Token inválido o expirado');
+  });
+
+  it('devuelve 401 genérico cuando la aprobación ya no está pendiente (aprobada)', async () => {
+    const { rawToken } = await crearPrestamoConAprobacion(ctx);
+
+    // Consumir el token aprobando → aprobacion.estado = 'aprobada'
+    await request(ctx.app.getHttpServer())
+      .post('/api/v1/aprobaciones/decidir-via-token')
+      .send({ token: rawToken, decision: 'aprobar' })
+      .expect(200);
+
+    // El token fue consumido (usado=true), por lo que verify() ya lanza Unauthorized
+    const res = await request(ctx.app.getHttpServer())
+      .get(`/api/v1/aprobaciones/contexto-token/${encodeURIComponent(rawToken)}`)
+      .expect(401);
+
+    expect(res.body.message).toBe('Token inválido o expirado');
+  });
+
+  it('devuelve 503 cuando la feature flag está deshabilitada', async () => {
+    const { app: appOff } = await buildApp(false);
+
+    const res = await request(appOff.getHttpServer())
+      .get('/api/v1/aprobaciones/contexto-token/cualquier-token')
+      .expect(503);
+
+    expect(res.body.message).toMatch(/deshabilitada/i);
+
+    await appOff.close();
   });
 });
 

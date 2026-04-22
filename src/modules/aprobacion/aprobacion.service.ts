@@ -429,4 +429,41 @@ export class AprobacionService {
   async countPendientes(): Promise<number> {
     return this.aprobacionModel.countDocuments({ estado: 'pendiente' });
   }
+
+  /**
+   * FR-12, FR-14, AD-7 — Obtiene el contexto de una aprobación a partir de un magic-link token.
+   * Completamente idempotente: NO escribe en la DB. Puede llamarse N veces sin efectos.
+   * Lanza UnauthorizedException genérico en cualquier caso inválido (token, aprobación no pendiente).
+   */
+  async getContextoToken(rawToken: string): Promise<{
+    tipo: string;
+    entidad: string;
+    descripcion: string;
+    monto: number;
+    solicitante: string;
+    fechaSolicitud: Date;
+    expiraEn: Date;
+    aprobadorEmail: string;
+  }> {
+    // Verificar token — lanza UnauthorizedException con mensaje genérico si es inválido/usado/expirado
+    const tokenDoc: AprobacionTokenDocument = await this.tokenService.verify(rawToken);
+
+    const aprobacion = await this.aprobacionModel.findById(tokenDoc.aprobacionId);
+
+    // Si la aprobación no está pendiente, el token no es accionable — mismo error genérico
+    if (!aprobacion || aprobacion.estado !== 'pendiente') {
+      throw new Error('Token inválido o expirado');
+    }
+
+    return {
+      tipo: aprobacion.tipo,
+      entidad: aprobacion.entidad,
+      descripcion: aprobacion.descripcion,
+      monto: aprobacion.monto,
+      solicitante: aprobacion.createdByEmail,
+      fechaSolicitud: (aprobacion as any).createdAt,
+      expiraEn: tokenDoc.expiresAt,
+      aprobadorEmail: tokenDoc.userEmail,
+    };
+  }
 }
