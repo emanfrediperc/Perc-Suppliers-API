@@ -70,17 +70,25 @@ export class AprobacionService {
       aprobacionesRequeridas,
     });
 
-    // T011 — Notificar a los aprobadores (no a tesoreria)
-    await this.notifService.notifyUsersByRole(['aprobador'], {
-      tipo: 'aprobacion_pendiente',
-      titulo: 'Nueva aprobacion pendiente',
-      mensaje: `${data.createdByEmail} solicita aprobacion para ${data.tipo} de ${data.entidad} - Monto: $${data.monto.toLocaleString('es-AR')}`,
-      entidad: 'aprobaciones',
-      entidadId: aprobacion._id.toString(),
-    });
+    // T012 — Flag leído antes para decidir si notifyUsersByRole manda mail o no
+    const magicLinkEnabled = this.nestConfigService.get<boolean>('magicLink.enabled');
+
+    // T011 — Notificar a los aprobadores in-app. El mail solo se manda aquí
+    // si el magic-link está deshabilitado; si está on, el mail "bonito" con
+    // botones lo emite el bloque siguiente y no queremos duplicar.
+    await this.notifService.notifyUsersByRole(
+      ['aprobador'],
+      {
+        tipo: 'aprobacion_pendiente',
+        titulo: 'Nueva aprobacion pendiente',
+        mensaje: `${data.createdByEmail} solicita aprobacion para ${data.tipo} de ${data.entidad} - Monto: $${data.monto.toLocaleString('es-AR')}`,
+        entidad: 'aprobaciones',
+        entidadId: aprobacion._id.toString(),
+      },
+      { sendEmail: !magicLinkEnabled },
+    );
 
     // T012 — Generar magic-link tokens y enviar emails a cada aprobador
-    const magicLinkEnabled = this.nestConfigService.get<boolean>('magicLink.enabled');
     if (magicLinkEnabled) {
       const baseUrl = this.nestConfigService.get<string>('magicLink.baseUrl') ?? 'http://localhost:4200/aprobar';
       const ttlHours = this.nestConfigService.get<number>('magicLink.ttlHours') ?? 48;
@@ -392,14 +400,19 @@ export class AprobacionService {
       }
     }
 
-    // Notificar a aprobadores in-app
-    await this.notifService.notifyUsersByRole(['aprobador'], {
-      tipo: 'aprobacion_reenviada',
-      titulo: 'Solicitud reenviada para aprobación',
-      mensaje: `${user.email} reenvió su solicitud de ${aprobacion.tipo} de ${aprobacion.entidad}`,
-      entidad: 'aprobaciones',
-      entidadId: aprobacionId,
-    });
+    // Notificar a aprobadores in-app (sin mail duplicado si el magic-link está on;
+    // el mail bonito lo emitió el bloque de arriba)
+    await this.notifService.notifyUsersByRole(
+      ['aprobador'],
+      {
+        tipo: 'aprobacion_reenviada',
+        titulo: 'Solicitud reenviada para aprobación',
+        mensaje: `${user.email} reenvió su solicitud de ${aprobacion.tipo} de ${aprobacion.entidad}`,
+        entidad: 'aprobaciones',
+        entidadId: aprobacionId,
+      },
+      { sendEmail: !magicLinkEnabled },
+    );
 
     // T038 — Auditar la acción de reenvío en sí
     this.auditLogService
