@@ -10,8 +10,9 @@ import { Types } from 'mongoose';
 import { CompraMonedaExtranjeraService } from './compra-moneda-extranjera.service';
 import { CompraMonedaExtranjera } from './schemas/compra-moneda-extranjera.schema';
 import { EmpresaCliente } from '../empresa-cliente/schemas/empresa-cliente.schema';
+import { EmpresaProveedora } from '../empresa-proveedora/schemas/empresa-proveedora.schema';
 import { EstadoCompraMonedaExtranjera } from './enums/estado-compra.enum';
-import { ModalidadCompra } from './enums/modalidad-compra.enum';
+import { Moneda } from './enums/moneda.enum';
 import { CreateCompraMonedaExtranjeraDto } from './dto/create-compra-moneda-extranjera.dto';
 import { QueryComprasMonedaExtranjeraDto } from './dto/query-compras-moneda-extranjera.dto';
 import { AnularCompraMonedaExtranjeraDto } from './dto/anular-compra-moneda-extranjera.dto';
@@ -36,18 +37,20 @@ function makeEmpresa(overrides: Record<string, unknown> = {}) {
 function makeCompra(overrides: Record<string, unknown> = {}) {
   return {
     _id: objectId(COMPRA_ID),
-    fecha: new Date('2026-04-14'),
-    modalidad: ModalidadCompra.CABLE,
-    empresaCliente: {
+    fechaSolicitada: new Date('2026-04-14'),
+    monedaOrigen: Moneda.ARS,
+    monedaDestino: Moneda.USD_CABLE,
+    empresa: {
       empresaId: objectId(EMPRESA_ID),
+      empresaKind: 'cliente' as const,
       razonSocialCache: 'Acme SA',
     },
-    montoUSD: 10000,
+    montoOrigen: 12500000,
     tipoCambio: 1250,
-    montoARS: 12500000,
+    montoDestino: 10000,
     contraparte: 'Banco Nación',
     comision: 0,
-    estado: EstadoCompraMonedaExtranjera.CONFIRMADA,
+    estado: EstadoCompraMonedaExtranjera.SOLICITADA,
     creadoPor: objectId(USER_ID),
     anuladoPor: undefined,
     anuladoAt: undefined,
@@ -60,7 +63,6 @@ function makeCompra(overrides: Record<string, unknown> = {}) {
 // ─── Mock factories ───────────────────────────────────────────────────────────
 
 function makeMockCompraModel(compra: ReturnType<typeof makeCompra>) {
-  // Constructor mock so `new this.model(...)` returns an object with .save()
   const ModelConstructor = jest.fn().mockImplementation(() => ({
     ...compra,
     save: compra.save,
@@ -75,7 +77,7 @@ function makeMockCompraModel(compra: ReturnType<typeof makeCompra>) {
   return ModelConstructor;
 }
 
-function makeMockClienteModel(empresa: ReturnType<typeof makeEmpresa> | null) {
+function makeMockEmpresaModel(empresa: ReturnType<typeof makeEmpresa> | null) {
   const chain = {
     select: jest.fn().mockReturnThis(),
     lean: jest.fn().mockReturnThis(),
@@ -93,26 +95,24 @@ function makeMockClienteModel(empresa: ReturnType<typeof makeEmpresa> | null) {
 describe('CompraMonedaExtranjeraService', () => {
   let service: CompraMonedaExtranjeraService;
   let compraModel: ReturnType<typeof makeMockCompraModel>;
-  let clienteModel: ReturnType<typeof makeMockClienteModel>;
+  let clienteModel: ReturnType<typeof makeMockEmpresaModel>;
+  let proveedoraModel: ReturnType<typeof makeMockEmpresaModel>;
 
   async function init(
     empresa: ReturnType<typeof makeEmpresa> | null,
     compra: ReturnType<typeof makeCompra>,
+    kind: 'cliente' | 'proveedora' = 'cliente',
   ) {
     compraModel = makeMockCompraModel(compra);
-    clienteModel = makeMockClienteModel(empresa);
+    clienteModel = makeMockEmpresaModel(kind === 'cliente' ? empresa : makeEmpresa());
+    proveedoraModel = makeMockEmpresaModel(kind === 'proveedora' ? empresa : makeEmpresa());
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         CompraMonedaExtranjeraService,
-        {
-          provide: getModelToken(CompraMonedaExtranjera.name),
-          useValue: compraModel,
-        },
-        {
-          provide: getModelToken(EmpresaCliente.name),
-          useValue: clienteModel,
-        },
+        { provide: getModelToken(CompraMonedaExtranjera.name), useValue: compraModel },
+        { provide: getModelToken(EmpresaCliente.name), useValue: clienteModel },
+        { provide: getModelToken(EmpresaProveedora.name), useValue: proveedoraModel },
       ],
     }).compile();
 
@@ -123,12 +123,14 @@ describe('CompraMonedaExtranjeraService', () => {
 
   describe('create', () => {
     const dto: CreateCompraMonedaExtranjeraDto = {
-      fecha: '2026-04-14',
-      modalidad: ModalidadCompra.CABLE,
-      empresaClienteId: EMPRESA_ID,
-      montoUSD: 10000,
+      fechaSolicitada: '2026-04-14',
+      monedaOrigen: Moneda.ARS,
+      monedaDestino: Moneda.USD_CABLE,
+      empresaId: EMPRESA_ID,
+      empresaKind: 'cliente',
+      montoOrigen: 12500000,
       tipoCambio: 1250,
-      montoARS: 12500000,
+      montoDestino: 10000,
       contraparte: 'Banco Nación',
     };
 
@@ -141,7 +143,18 @@ describe('CompraMonedaExtranjeraService', () => {
 
       expect(compraModel).toHaveBeenCalledTimes(1);
       expect(compra.save).toHaveBeenCalledTimes(1);
-      expect(result.estado).toBe(EstadoCompraMonedaExtranjera.CONFIRMADA);
+      expect(result.estado).toBe(EstadoCompraMonedaExtranjera.SOLICITADA);
+    });
+
+    it('lanza UnprocessableEntityException cuando monedaOrigen === monedaDestino', async () => {
+      await init(makeEmpresa(), makeCompra());
+
+      await expect(
+        service.create({ ...dto, monedaDestino: Moneda.ARS }, USER_ID),
+      ).rejects.toThrow(UnprocessableEntityException);
+      await expect(
+        service.create({ ...dto, monedaDestino: Moneda.ARS }, USER_ID),
+      ).rejects.toThrow('La moneda de origen y destino deben ser distintas');
     });
 
     it('lanza NotFoundException cuando la empresa no existe', async () => {
@@ -164,17 +177,31 @@ describe('CompraMonedaExtranjeraService', () => {
       );
     });
 
+    it('resuelve empresa proveedora cuando empresaKind="proveedora"', async () => {
+      const compra = makeCompra({
+        empresa: {
+          empresaId: objectId(EMPRESA_ID),
+          empresaKind: 'proveedora' as const,
+          razonSocialCache: 'Acme SA',
+        },
+      });
+      compra.save.mockResolvedValue(compra);
+      await init(makeEmpresa(), compra, 'proveedora');
+
+      await service.create({ ...dto, empresaKind: 'proveedora' }, USER_ID);
+
+      expect(proveedoraModel.findById).toHaveBeenCalledWith(EMPRESA_ID);
+    });
+
     it('usa comision 0 cuando el dto no la incluye', async () => {
       const compra = makeCompra({ comision: 0 });
       compra.save.mockResolvedValue(compra);
       await init(makeEmpresa(), compra);
 
-      const result = await service.create({ ...dto }, USER_ID);
+      await service.create({ ...dto }, USER_ID);
 
-      // El constructor del modelo fue llamado — verificamos que comision=0
       const constructorArg = (compraModel as jest.Mock).mock.calls[0][0];
       expect(constructorArg.comision).toBe(0);
-      expect(result).toBeDefined();
     });
 
     it('pasa comision cuando el dto la provee', async () => {
@@ -211,7 +238,7 @@ describe('CompraMonedaExtranjeraService', () => {
       await init(makeEmpresa(), makeCompra());
     });
 
-    it('sin filtros — usa page 1, limit 20, sort fecha desc', async () => {
+    it('sin filtros — usa page 1, limit 20, sort fechaSolicitada desc', async () => {
       const compras = [makeCompra()];
       setupFindAll(compras, 1);
 
@@ -225,18 +252,27 @@ describe('CompraMonedaExtranjeraService', () => {
       expect(result.totalPages).toBe(1);
 
       const findChain = (compraModel as any).find.mock.results[0].value;
-      expect(findChain.sort).toHaveBeenCalledWith({ fecha: -1 });
+      expect(findChain.sort).toHaveBeenCalledWith({ fechaSolicitada: -1 });
       expect(findChain.skip).toHaveBeenCalledWith(0);
       expect(findChain.limit).toHaveBeenCalledWith(20);
     });
 
-    it('filtra por modalidad', async () => {
+    it('filtra por monedaOrigen', async () => {
       setupFindAll([], 0);
 
-      await service.findAll({ modalidad: ModalidadCompra.USD_LOCAL });
+      await service.findAll({ monedaOrigen: Moneda.USD_LOCAL });
 
       const filterArg = (compraModel as any).find.mock.calls[0][0];
-      expect(filterArg.modalidad).toBe(ModalidadCompra.USD_LOCAL);
+      expect(filterArg.monedaOrigen).toBe(Moneda.USD_LOCAL);
+    });
+
+    it('filtra por monedaDestino', async () => {
+      setupFindAll([], 0);
+
+      await service.findAll({ monedaDestino: Moneda.USD_CABLE });
+
+      const filterArg = (compraModel as any).find.mock.calls[0][0];
+      expect(filterArg.monedaDestino).toBe(Moneda.USD_CABLE);
     });
 
     it('filtra por estado', async () => {
@@ -248,14 +284,14 @@ describe('CompraMonedaExtranjeraService', () => {
       expect(filterArg.estado).toBe(EstadoCompraMonedaExtranjera.ANULADA);
     });
 
-    it('filtra por empresaClienteId convirtiendo a ObjectId', async () => {
+    it('filtra por empresaId convirtiendo a ObjectId', async () => {
       setupFindAll([], 0);
 
-      await service.findAll({ empresaClienteId: EMPRESA_ID });
+      await service.findAll({ empresaId: EMPRESA_ID });
 
       const filterArg = (compraModel as any).find.mock.calls[0][0];
-      expect(filterArg['empresaCliente.empresaId']).toBeInstanceOf(Types.ObjectId);
-      expect(filterArg['empresaCliente.empresaId'].toString()).toBe(EMPRESA_ID);
+      expect(filterArg['empresa.empresaId']).toBeInstanceOf(Types.ObjectId);
+      expect(filterArg['empresa.empresaId'].toString()).toBe(EMPRESA_ID);
     });
 
     it('aplica $gte y $lte cuando se proveen fechaDesde y fechaHasta', async () => {
@@ -267,8 +303,8 @@ describe('CompraMonedaExtranjeraService', () => {
       });
 
       const filterArg = (compraModel as any).find.mock.calls[0][0];
-      expect(filterArg.fecha.$gte).toEqual(new Date('2026-01-01'));
-      expect(filterArg.fecha.$lte).toEqual(new Date('2026-12-31'));
+      expect(filterArg.fechaSolicitada.$gte).toEqual(new Date('2026-01-01'));
+      expect(filterArg.fechaSolicitada.$lte).toEqual(new Date('2026-12-31'));
     });
 
     it('aplica solo $gte cuando no se provee fechaHasta', async () => {
@@ -277,8 +313,8 @@ describe('CompraMonedaExtranjeraService', () => {
       await service.findAll({ fechaDesde: '2026-06-01' });
 
       const filterArg = (compraModel as any).find.mock.calls[0][0];
-      expect(filterArg.fecha.$gte).toEqual(new Date('2026-06-01'));
-      expect(filterArg.fecha.$lte).toBeUndefined();
+      expect(filterArg.fechaSolicitada.$gte).toEqual(new Date('2026-06-01'));
+      expect(filterArg.fechaSolicitada.$lte).toBeUndefined();
     });
 
     it('limita a 100 cuando limit supera 100', async () => {
@@ -353,16 +389,15 @@ describe('CompraMonedaExtranjeraService', () => {
         exec: jest.fn().mockResolvedValue(compra),
       });
 
-      const result = await service.anular(COMPRA_ID, anularDto, USER_ID);
+      await service.anular(COMPRA_ID, anularDto, USER_ID);
 
       expect(compra.estado).toBe(EstadoCompraMonedaExtranjera.ANULADA);
       expect(compra.anuladoPor).toBeInstanceOf(Types.ObjectId);
       expect(compra.anuladoAt).toBeInstanceOf(Date);
       expect(compra.save).toHaveBeenCalledTimes(1);
-      expect(result).toBeDefined();
     });
 
-    it('lanza UnprocessableEntityException si la compra ya está ANULADA', async () => {
+    it('lanza UnprocessableEntityException si la compra no está SOLICITADA', async () => {
       const compra = makeCompra({ estado: EstadoCompraMonedaExtranjera.ANULADA });
       (compraModel as any).findById.mockReturnValue({
         populate: jest.fn().mockReturnThis(),
@@ -373,7 +408,7 @@ describe('CompraMonedaExtranjeraService', () => {
         UnprocessableEntityException,
       );
       await expect(service.anular(COMPRA_ID, anularDto, USER_ID)).rejects.toThrow(
-        'La compra ya se encuentra anulada',
+        /Solo se pueden anular compras en estado SOLICITADA/,
       );
     });
 

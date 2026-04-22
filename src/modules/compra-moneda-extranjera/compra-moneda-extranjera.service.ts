@@ -75,8 +75,15 @@ export class CompraMonedaExtranjeraService {
     dto: CreateCompraMonedaExtranjeraDto,
     currentUser: { userId: string; email: string },
   ): Promise<CompraMonedaExtranjeraDocument> {
+    if (dto.monedaOrigen === dto.monedaDestino) {
+      throw new UnprocessableEntityException(
+        'La moneda de origen y destino deben ser distintas',
+      );
+    }
+
     const empresa = await this.resolveEmpresa(dto.empresaId, dto.empresaKind);
 
+<<<<<<< HEAD
     // T019 — Transacción Mongoose: crear la compra y la solicitud de aprobación
     // de forma atómica. Si no hay aprobadores activos, aprobacionService lanza
     // BadRequestException y la transacción se aborta antes de persistir la compra.
@@ -106,6 +113,23 @@ export class CompraMonedaExtranjeraService {
           ],
           { session },
         );
+=======
+    const compra = new this.model({
+      fechaSolicitada: new Date(dto.fechaSolicitada),
+      monedaOrigen: dto.monedaOrigen,
+      monedaDestino: dto.monedaDestino,
+      empresa,
+      montoOrigen: dto.montoOrigen,
+      tipoCambio: dto.tipoCambio,
+      montoDestino: dto.montoDestino,
+      contraparte: dto.contraparte,
+      comision: dto.comision ?? 0,
+      referencia: dto.referencia,
+      observaciones: dto.observaciones,
+      estado: EstadoCompraMonedaExtranjera.SOLICITADA,
+      creadoPor: new Types.ObjectId(userId),
+    });
+>>>>>>> origin/Sebita
 
         // Lanza BadRequestException si no hay aprobadores activos → aborta transacción
         await this.aprobacionService.createAprobacion({
@@ -128,7 +152,8 @@ export class CompraMonedaExtranjeraService {
   async findAll(query: QueryComprasMonedaExtranjeraDto): Promise<PaginatedCompras> {
     const filter: Record<string, unknown> = {};
 
-    if (query.modalidad !== undefined) filter.modalidad = query.modalidad;
+    if (query.monedaOrigen !== undefined) filter.monedaOrigen = query.monedaOrigen;
+    if (query.monedaDestino !== undefined) filter.monedaDestino = query.monedaDestino;
     if (query.estado !== undefined) filter.estado = query.estado;
     if (query.empresaId) {
       filter['empresa.empresaId'] = new Types.ObjectId(query.empresaId);
