@@ -83,7 +83,6 @@ export class CompraMonedaExtranjeraService {
 
     const empresa = await this.resolveEmpresa(dto.empresaId, dto.empresaKind);
 
-<<<<<<< HEAD
     // T019 — Transacción Mongoose: crear la compra y la solicitud de aprobación
     // de forma atómica. Si no hay aprobadores activos, aprobacionService lanza
     // BadRequestException y la transacción se aborta antes de persistir la compra.
@@ -97,11 +96,12 @@ export class CompraMonedaExtranjeraService {
           [
             {
               fechaSolicitada: new Date(dto.fechaSolicitada),
-              modalidad: dto.modalidad,
+              monedaOrigen: dto.monedaOrigen,
+              monedaDestino: dto.monedaDestino,
               empresa,
-              montoUSD: dto.montoUSD,
+              montoOrigen: dto.montoOrigen,
               tipoCambio: dto.tipoCambio,
-              montoARS: dto.montoARS,
+              montoDestino: dto.montoDestino,
               contraparte: dto.contraparte,
               comision: dto.comision ?? 0,
               referencia: dto.referencia,
@@ -113,31 +113,14 @@ export class CompraMonedaExtranjeraService {
           ],
           { session },
         );
-=======
-    const compra = new this.model({
-      fechaSolicitada: new Date(dto.fechaSolicitada),
-      monedaOrigen: dto.monedaOrigen,
-      monedaDestino: dto.monedaDestino,
-      empresa,
-      montoOrigen: dto.montoOrigen,
-      tipoCambio: dto.tipoCambio,
-      montoDestino: dto.montoDestino,
-      contraparte: dto.contraparte,
-      comision: dto.comision ?? 0,
-      referencia: dto.referencia,
-      observaciones: dto.observaciones,
-      estado: EstadoCompraMonedaExtranjera.SOLICITADA,
-      creadoPor: new Types.ObjectId(userId),
-    });
->>>>>>> origin/Sebita
 
         // Lanza BadRequestException si no hay aprobadores activos → aborta transacción
         await this.aprobacionService.createAprobacion({
           entidad: 'compras-fx',
           entidadId: createdCompra!._id.toString(),
           tipo: 'creacion',
-          monto: dto.montoUSD,
-          descripcion: `Compra FX ${empresa.razonSocialCache} USD ${new Intl.NumberFormat('es-AR').format(dto.montoUSD)} (${dto.modalidad})`,
+          monto: dto.montoOrigen,
+          descripcion: `Compra FX ${empresa.razonSocialCache} ${dto.monedaOrigen}→${dto.monedaDestino} ${new Intl.NumberFormat('es-AR').format(dto.montoOrigen)}`,
           createdBy: currentUser.userId,
           createdByEmail: currentUser.email,
           datosOperacion: { ...dto },
