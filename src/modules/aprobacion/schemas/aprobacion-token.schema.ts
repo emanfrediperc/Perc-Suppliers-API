@@ -41,11 +41,11 @@ export class AprobacionToken {
   usadoEn: Date | null;
 
   /** IP desde la que se consumió el token. */
-  @Prop({ default: null })
+  @Prop({ type: String, default: null })
   ip: string | null;
 
   /** User-Agent del cliente que consumió el token. */
-  @Prop({ default: null })
+  @Prop({ type: String, default: null })
   userAgent: string | null;
 }
 
