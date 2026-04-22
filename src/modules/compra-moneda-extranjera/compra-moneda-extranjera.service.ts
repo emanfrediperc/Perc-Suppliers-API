@@ -154,7 +154,7 @@ export class CompraMonedaExtranjeraService {
     const skip = (page - 1) * limit;
 
     const [data, total] = await Promise.all([
-      this.model.find(filter).sort({ fechaSolicitada: -1 }).skip(skip).limit(limit).exec(),
+      this.model.find(filter).sort({ createdAt: -1 }).skip(skip).limit(limit).exec(),
       this.model.countDocuments(filter).exec(),
     ]);
 
