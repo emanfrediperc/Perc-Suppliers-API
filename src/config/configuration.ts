@@ -32,6 +32,14 @@ export default () => {
       user: process.env.SMTP_USER || '',
       pass: process.env.SMTP_PASS || '',
     },
+    resend: {
+      /**
+       * API key de Resend (https://resend.com/api-keys). Si está presente,
+       * EmailService usa la API HTTP de Resend en lugar de SMTP. Útil en
+       * entornos que bloquean puertos SMTP outbound (Railway, algunos PaaS).
+       */
+      apiKey: process.env.RESEND_API_KEY || '',
+    },
     email: {
       from: process.env.EMAIL_FROM || 'noreply@perc-suppliers.com',
     },

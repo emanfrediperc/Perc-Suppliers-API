@@ -2,18 +2,34 @@ import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import * as nodemailer from 'nodemailer';
 
+type EmailMode = 'resend-http' | 'smtp' | 'mock';
+
 @Injectable()
 export class EmailService {
   private readonly logger = new Logger(EmailService.name);
   private transporter: nodemailer.Transporter | null = null;
   private from: string;
+  private mode: EmailMode = 'mock';
+  private resendApiKey = '';
 
   constructor(private config: ConfigService) {
+    this.from = this.config.get<string>('email.from') || 'noreply@perc-suppliers.com';
+
+    // Preferir la API HTTP de Resend si está configurada: funciona en entornos
+    // donde el SMTP outbound está bloqueado (Railway suele bloquear 25/465/587).
+    const resendKey = this.config.get<string>('resend.apiKey');
+    if (resendKey) {
+      this.resendApiKey = resendKey;
+      this.mode = 'resend-http';
+      this.logger.log('Email service configured (Resend HTTP API)');
+      return;
+    }
+
+    // Fallback: SMTP tradicional via nodemailer.
     const host = this.config.get<string>('smtp.host');
     const port = this.config.get<number>('smtp.port');
     const user = this.config.get<string>('smtp.user');
     const pass = this.config.get<string>('smtp.pass');
-    this.from = this.config.get<string>('email.from') || 'noreply@perc-suppliers.com';
 
     if (host && user && pass) {
       this.transporter = nodemailer.createTransport({
@@ -22,20 +38,45 @@ export class EmailService {
         secure: port === 465,
         auth: { user, pass },
       });
-      this.logger.log('Email service configured');
+      this.mode = 'smtp';
+      this.logger.log('Email service configured (SMTP)');
     } else {
-      this.logger.warn('Email service not configured (SMTP credentials missing). Emails will be logged only.');
+      this.logger.warn('Email service not configured (no RESEND_API_KEY and no SMTP credentials). Emails will be logged only.');
     }
   }
 
   async sendEmail(to: string, subject: string, html: string): Promise<boolean> {
-    if (!this.transporter) {
+    if (this.mode === 'mock') {
       this.logger.log(`[EMAIL MOCK] To: ${to} | Subject: ${subject}`);
       return false;
     }
 
+    if (this.mode === 'resend-http') {
+      try {
+        const res = await fetch('https://api.resend.com/emails', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${this.resendApiKey}`,
+          },
+          body: JSON.stringify({ from: this.from, to, subject, html }),
+        });
+        if (!res.ok) {
+          const body = await res.text();
+          this.logger.error(`Resend API ${res.status} for ${to}: ${body}`);
+          return false;
+        }
+        this.logger.log(`Email sent to ${to}: ${subject}`);
+        return true;
+      } catch (error: any) {
+        this.logger.error(`Resend request failed for ${to}: ${error.message}`);
+        return false;
+      }
+    }
+
+    // mode === 'smtp'
     try {
-      await this.transporter.sendMail({ from: this.from, to, subject, html });
+      await this.transporter!.sendMail({ from: this.from, to, subject, html });
       this.logger.log(`Email sent to ${to}: ${subject}`);
       return true;
     } catch (error: any) {
