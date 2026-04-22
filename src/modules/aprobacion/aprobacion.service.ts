@@ -188,6 +188,7 @@ export class AprobacionService {
       if (aprobaciones >= aprobacion.aprobacionesRequeridas) {
         aprobacion.estado = 'aprobada';
 
+        // Aviso al creador (tesorería) de que su solicitud pasó
         await this.notifService.create({
           usuario: aprobacion.createdBy,
           tipo: 'pago_confirmado',
@@ -196,6 +197,23 @@ export class AprobacionService {
           entidad: aprobacion.entidad,
           entidadId: aprobacion.entidadId,
         });
+
+        // Aviso in-app a los operadores: tienen una operación aprobada lista para ejecutar.
+        // sendEmail: false porque no necesitan mail — solo un badge/bell en el webapp.
+        const montoFmt = aprobacion.monto != null
+          ? `$${aprobacion.monto.toLocaleString('es-AR')}`
+          : '';
+        await this.notifService.notifyUsersByRole(
+          ['operador'],
+          {
+            tipo: 'aprobacion_para_ejecutar',
+            titulo: 'Operación lista para ejecutar',
+            mensaje: `Aprobada la ${aprobacion.tipo} de ${aprobacion.entidad}${montoFmt ? ' por ' + montoFmt : ''} — lista para ejecutar`,
+            entidad: aprobacion.entidad,
+            entidadId: aprobacion.entidadId,
+          },
+          { sendEmail: false },
+        );
       }
     }
 

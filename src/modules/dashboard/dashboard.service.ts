@@ -5,6 +5,10 @@ import { OrdenPago, OrdenPagoDocument } from '../orden-pago/schemas/orden-pago.s
 import { Factura, FacturaDocument } from '../factura/schemas/factura.schema';
 import { Pago, PagoDocument } from '../pago/schemas/pago.schema';
 import { EmpresaProveedora, EmpresaProveedoraDocument } from '../empresa-proveedora/schemas/empresa-proveedora.schema';
+import { Prestamo, PrestamoDocument } from '../prestamos/schemas/prestamo.schema';
+import { CompraMonedaExtranjera, CompraMonedaExtranjeraDocument } from '../compra-moneda-extranjera/schemas/compra-moneda-extranjera.schema';
+import { PrestamoStatus } from '../prestamos/enums/prestamo-status.enum';
+import { EstadoCompraMonedaExtranjera } from '../compra-moneda-extranjera/enums/estado-compra.enum';
 import { DashboardQueryDto } from './dto/dashboard-query.dto';
 
 @Injectable()
@@ -14,7 +18,31 @@ export class DashboardService {
     @InjectModel(Factura.name) private facturaModel: Model<FacturaDocument>,
     @InjectModel(Pago.name) private pagoModel: Model<PagoDocument>,
     @InjectModel(EmpresaProveedora.name) private empresaModel: Model<EmpresaProveedoraDocument>,
+    @InjectModel(Prestamo.name) private prestamoModel: Model<PrestamoDocument>,
+    @InjectModel(CompraMonedaExtranjera.name) private compraFxModel: Model<CompraMonedaExtranjeraDocument>,
   ) {}
+
+  /**
+   * Counts de "cosas que el operador tiene que ejecutar" por módulo.
+   * El criterio es: el estado inicial que queda después de aprobar (y antes
+   * de que el operador tome acción). Es aproximado para prestamos porque
+   * ACTIVE también incluye préstamos vigentes viejos.
+   */
+  async getOperadorCounts() {
+    const [ordenesPago, pagos, prestamos, comprasFx] = await Promise.all([
+      this.ordenModel.countDocuments({ estado: 'pendiente' }),
+      this.pagoModel.countDocuments({ estado: 'pendiente' }),
+      this.prestamoModel.countDocuments({ status: PrestamoStatus.ACTIVE }),
+      this.compraFxModel.countDocuments({ estado: EstadoCompraMonedaExtranjera.SOLICITADA }),
+    ]);
+    return {
+      ordenesPago,
+      pagos,
+      prestamos,
+      comprasFx,
+      total: ordenesPago + pagos + prestamos + comprasFx,
+    };
+  }
 
   async getSummary(dto?: DashboardQueryDto) {
     // Date filter for ordenes/facturas (uses 'fecha' field, with end-of-day for hasta)

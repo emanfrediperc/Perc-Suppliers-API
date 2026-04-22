@@ -36,4 +36,12 @@ export class DashboardController {
   @Get('facturas-por-vencer')
   @Roles('admin', 'tesoreria', 'operador', 'consulta')
   getFacturasPorVencer() { return this.service.getFacturasPorVencer(); }
+
+  /**
+   * Counts de "cosas aprobadas listas para ejecutar" para el operador.
+   * Usado por el sidebar del webapp para mostrar badges por módulo.
+   */
+  @Get('operador-counts')
+  @Roles('admin', 'operador')
+  getOperadorCounts() { return this.service.getOperadorCounts(); }
 }

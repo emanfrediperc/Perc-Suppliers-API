@@ -8,7 +8,20 @@ export class Notificacion {
   @Prop({ required: true })
   usuario: string;
 
-  @Prop({ required: true, enum: ['aprobacion_pendiente', 'pago_confirmado', 'pago_rechazado', 'factura_por_vencer', 'factura_vencida', 'orden_sincronizada', 'sistema'] })
+  @Prop({
+    required: true,
+    enum: [
+      'aprobacion_pendiente',
+      'aprobacion_reenviada',
+      'aprobacion_para_ejecutar',
+      'pago_confirmado',
+      'pago_rechazado',
+      'factura_por_vencer',
+      'factura_vencida',
+      'orden_sincronizada',
+      'sistema',
+    ],
+  })
   tipo: string;
 
   @Prop({ required: true })
