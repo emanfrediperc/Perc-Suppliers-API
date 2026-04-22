@@ -4,8 +4,8 @@ import {
   UnprocessableEntityException,
   BadRequestException,
 } from '@nestjs/common';
-import { InjectModel } from '@nestjs/mongoose';
-import { Model, Types } from 'mongoose';
+import { InjectModel, InjectConnection } from '@nestjs/mongoose';
+import { Model, Types, Connection } from 'mongoose';
 import {
   CompraMonedaExtranjera,
   CompraMonedaExtranjeraDocument,
@@ -25,6 +25,7 @@ import { AnularCompraMonedaExtranjeraDto } from './dto/anular-compra-moneda-extr
 import { EjecutarCompraMonedaExtranjeraDto } from './dto/ejecutar-compra-moneda-extranjera.dto';
 import { EstimarEjecucionCompraMonedaExtranjeraDto } from './dto/estimar-ejecucion-compra-moneda-extranjera.dto';
 import { EstadoCompraMonedaExtranjera } from './enums/estado-compra.enum';
+import { AprobacionService } from '../aprobacion/aprobacion.service';
 
 export interface PaginatedCompras {
   data: CompraMonedaExtranjeraDocument[];
@@ -43,6 +44,8 @@ export class CompraMonedaExtranjeraService {
     private clienteModel: Model<EmpresaClienteDocument>,
     @InjectModel(EmpresaProveedora.name)
     private proveedoraModel: Model<EmpresaProveedoraDocument>,
+    @InjectConnection() private readonly connection: Connection,
+    private readonly aprobacionService: AprobacionService,
   ) {}
 
   private async resolveEmpresa(
@@ -70,26 +73,56 @@ export class CompraMonedaExtranjeraService {
 
   async create(
     dto: CreateCompraMonedaExtranjeraDto,
-    userId: string,
+    currentUser: { userId: string; email: string },
   ): Promise<CompraMonedaExtranjeraDocument> {
     const empresa = await this.resolveEmpresa(dto.empresaId, dto.empresaKind);
 
-    const compra = new this.model({
-      fechaSolicitada: new Date(dto.fechaSolicitada),
-      modalidad: dto.modalidad,
-      empresa,
-      montoUSD: dto.montoUSD,
-      tipoCambio: dto.tipoCambio,
-      montoARS: dto.montoARS,
-      contraparte: dto.contraparte,
-      comision: dto.comision ?? 0,
-      referencia: dto.referencia,
-      observaciones: dto.observaciones,
-      estado: EstadoCompraMonedaExtranjera.SOLICITADA,
-      creadoPor: new Types.ObjectId(userId),
-    });
+    // T019 — Transacción Mongoose: crear la compra y la solicitud de aprobación
+    // de forma atómica. Si no hay aprobadores activos, aprobacionService lanza
+    // BadRequestException y la transacción se aborta antes de persistir la compra.
+    // Nota: Notificacion, AuditLog y AprobacionToken en createAprobacion son
+    // best-effort y ocurren fuera de esta sesión.
+    const session = await this.connection.startSession();
+    try {
+      let createdCompra: CompraMonedaExtranjeraDocument;
+      await session.withTransaction(async () => {
+        [createdCompra] = await this.model.create(
+          [
+            {
+              fechaSolicitada: new Date(dto.fechaSolicitada),
+              modalidad: dto.modalidad,
+              empresa,
+              montoUSD: dto.montoUSD,
+              tipoCambio: dto.tipoCambio,
+              montoARS: dto.montoARS,
+              contraparte: dto.contraparte,
+              comision: dto.comision ?? 0,
+              referencia: dto.referencia,
+              observaciones: dto.observaciones,
+              // Estado inicial: esperando aprobación
+              estado: EstadoCompraMonedaExtranjera.ESPERANDO_APROBACION,
+              creadoPor: new Types.ObjectId(currentUser.userId),
+            },
+          ],
+          { session },
+        );
 
-    return compra.save();
+        // Lanza BadRequestException si no hay aprobadores activos → aborta transacción
+        await this.aprobacionService.createAprobacion({
+          entidad: 'compras-fx',
+          entidadId: createdCompra!._id.toString(),
+          tipo: 'creacion',
+          monto: dto.montoUSD,
+          descripcion: `Compra FX ${empresa.razonSocialCache} USD ${new Intl.NumberFormat('es-AR').format(dto.montoUSD)} (${dto.modalidad})`,
+          createdBy: currentUser.userId,
+          createdByEmail: currentUser.email,
+          datosOperacion: { ...dto },
+        });
+      });
+      return createdCompra!;
+    } finally {
+      await session.endSession();
+    }
   }
 
   async findAll(query: QueryComprasMonedaExtranjeraDto): Promise<PaginatedCompras> {

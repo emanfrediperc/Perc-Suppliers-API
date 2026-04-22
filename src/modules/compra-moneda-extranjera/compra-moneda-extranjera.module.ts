@@ -6,6 +6,7 @@ import {
 } from './schemas/compra-moneda-extranjera.schema';
 import { CompraMonedaExtranjeraController } from './compra-moneda-extranjera.controller';
 import { CompraMonedaExtranjeraService } from './compra-moneda-extranjera.service';
+import { CompraMonedaExtranjeraAprobacionListener } from './compra-moneda-extranjera-aprobacion.listener';
 import { EmpresaClienteModule } from '../empresa-cliente/empresa-cliente.module';
 import { EmpresaProveedoraModule } from '../empresa-proveedora/empresa-proveedora.module';
 
@@ -16,9 +17,10 @@ import { EmpresaProveedoraModule } from '../empresa-proveedora/empresa-proveedor
     ]),
     EmpresaClienteModule,
     EmpresaProveedoraModule,
+    // AprobacionModule es @Global() — AprobacionService disponible sin importarlo explícitamente.
   ],
   controllers: [CompraMonedaExtranjeraController],
-  providers: [CompraMonedaExtranjeraService],
+  providers: [CompraMonedaExtranjeraService, CompraMonedaExtranjeraAprobacionListener],
   exports: [CompraMonedaExtranjeraService, MongooseModule],
 })
 export class CompraMonedaExtranjeraModule {}

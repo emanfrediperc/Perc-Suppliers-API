@@ -16,6 +16,7 @@ import { PaginatedResponseDto } from '../../common/dto/paginated-response.dto';
 import { escapeRegex } from '../../common/utils/escape-regex';
 import { IFinnegansService } from '../../integrations/finnegans/finnegans.interface';
 import { PagoCalculatorService } from '../../common/services/pago-calculator.service';
+import { AprobacionService } from '../aprobacion/aprobacion.service';
 
 @Injectable()
 export class OrdenPagoService {
@@ -31,9 +32,44 @@ export class OrdenPagoService {
     @Inject('FINNEGANS_SERVICE') private finnegansService: IFinnegansService,
     @InjectConnection() private connection: Connection,
     private pagoCalculator: PagoCalculatorService,
+    private readonly aprobacionService: AprobacionService,
   ) {}
 
-  async create(dto: CreateOrdenPagoDto): Promise<OrdenPagoDocument> { return this.ordenModel.create(dto); }
+  async create(
+    dto: CreateOrdenPagoDto,
+    currentUser: { userId: string; email: string },
+  ): Promise<OrdenPagoDocument> {
+    // T016 — Transacción Mongoose: crear la orden y la solicitud de aprobación
+    // de forma atómica. Si no hay aprobadores activos, aprobacionService lanza
+    // BadRequestException y la transacción se aborta antes de persistir la orden.
+    // Nota: Notificacion, AuditLog y AprobacionToken en createAprobacion son
+    // best-effort y ocurren fuera de esta sesión.
+    const session = await this.connection.startSession();
+    try {
+      let createdOrden: OrdenPagoDocument;
+      await session.withTransaction(async () => {
+        [createdOrden] = await this.ordenModel.create(
+          [{ ...dto, estado: 'esperando_aprobacion' }],
+          { session },
+        );
+
+        // Lanza BadRequestException si no hay aprobadores activos → aborta transacción
+        await this.aprobacionService.createAprobacion({
+          entidad: 'ordenes-pago',
+          entidadId: createdOrden!._id.toString(),
+          tipo: 'creacion',
+          monto: dto.montoTotal,
+          descripcion: `Orden de pago ${dto.numero} por ${new Intl.NumberFormat('es-AR').format(dto.montoTotal)} ${dto.moneda ?? 'ARS'}`,
+          createdBy: currentUser.userId,
+          createdByEmail: currentUser.email,
+          datosOperacion: { ...dto },
+        });
+      });
+      return createdOrden!;
+    } finally {
+      await session.endSession();
+    }
+  }
 
   async findAll(query: OrdenPagoQueryDto): Promise<PaginatedResponseDto<OrdenPagoDocument>> {
     const { page, limit, search, sortBy, sortOrder, empresaProveedora, empresaCliente, estado, fechaDesde, fechaHasta } = query;

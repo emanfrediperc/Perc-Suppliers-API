@@ -44,7 +44,7 @@ export class CompraMonedaExtranjeraController {
   @Roles('admin', 'tesoreria')
   @HttpCode(201)
   create(@Body() dto: CreateCompraMonedaExtranjeraDto, @Req() req: any) {
-    return this.service.create(dto, req.user.userId);
+    return this.service.create(dto, { userId: req.user.userId, email: req.user.email });
   }
 
   @Patch(':id/anular')

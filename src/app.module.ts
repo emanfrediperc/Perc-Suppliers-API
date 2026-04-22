@@ -4,6 +4,7 @@ import { MongooseModule } from '@nestjs/mongoose';
 import { ThrottlerModule } from '@nestjs/throttler';
 import { APP_GUARD, APP_INTERCEPTOR } from '@nestjs/core';
 import { ThrottlerGuard } from '@nestjs/throttler';
+import { EventEmitterModule } from '@nestjs/event-emitter';
 import configuration from './config/configuration';
 import { AuthModule } from './auth/auth.module';
 import { AuditLogModule } from './modules/audit-log/audit-log.module';
@@ -46,6 +47,7 @@ import { AuditLogInterceptor } from './modules/audit-log/audit-log.interceptor';
       inject: [ConfigService],
     }),
     ScheduleModule.forRoot(),
+    EventEmitterModule.forRoot(),
     AuthModule,
     AuditLogModule,
     NotificacionModule,

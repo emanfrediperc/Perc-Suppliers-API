@@ -1,5 +1,6 @@
-import { IsEmail, IsNotEmpty, IsOptional, IsString, MinLength, Matches } from 'class-validator';
+import { IsEmail, IsIn, IsNotEmpty, IsOptional, IsString, MinLength, Matches } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { VALID_ROLES } from '../schemas/user.schema';
 
 export class RegisterDto {
   @ApiProperty({ example: 'admin@perc.com' })
@@ -23,4 +24,9 @@ export class RegisterDto {
   @IsOptional()
   @IsString()
   apellido?: string;
+
+  @ApiPropertyOptional({ enum: VALID_ROLES, example: 'consulta' })
+  @IsOptional()
+  @IsIn([...VALID_ROLES])
+  role?: string;
 }

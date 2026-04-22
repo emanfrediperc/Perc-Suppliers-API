@@ -59,7 +59,8 @@ export class Pago {
   @Prop({ type: Types.ObjectId, ref: 'Convenio' })
   convenioAplicado: Types.ObjectId;
 
-  @Prop({ default: 'confirmado', enum: ['confirmado', 'pendiente', 'rechazado', 'anulado'] })
+  // T017 — 'esperando_aprobacion' added for approval gate
+  @Prop({ default: 'confirmado', enum: ['confirmado', 'pendiente', 'rechazado', 'anulado', 'esperando_aprobacion'] })
   estado: string;
 }
 

@@ -32,6 +32,14 @@ export default () => {
       user: process.env.SMTP_USER || '',
       pass: process.env.SMTP_PASS || '',
     },
+    resend: {
+      /**
+       * API key de Resend (https://resend.com/api-keys). Si está presente,
+       * EmailService usa la API HTTP de Resend en lugar de SMTP. Útil en
+       * entornos que bloquean puertos SMTP outbound (Railway, algunos PaaS).
+       */
+      apiKey: process.env.RESEND_API_KEY || '',
+    },
     email: {
       from: process.env.EMAIL_FROM || 'noreply@perc-suppliers.com',
     },
@@ -40,6 +48,14 @@ export default () => {
       authUrl: process.env.FINNEGANS_AUTH_URL || '',
       clientId: process.env.FINNEGANS_CLIENT_ID || '',
       clientSecret: process.env.FINNEGANS_CLIENT_SECRET || '',
+    },
+    magicLink: {
+      /** Habilita la generación de tokens y el envío de magic links por email. */
+      enabled: process.env.ENABLE_MAGIC_LINK === 'true',
+      /** URL base del frontend donde vive la ruta /aprobar (sin trailing slash). */
+      baseUrl: process.env.MAGIC_LINK_BASE_URL || 'http://localhost:4200/aprobar',
+      /** Horas de validez del token desde su emisión. */
+      ttlHours: parseInt(process.env.MAGIC_LINK_TTL_HOURS || '48', 10),
     },
   };
 };

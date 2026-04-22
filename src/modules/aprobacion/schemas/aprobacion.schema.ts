@@ -26,9 +26,34 @@ export class DecisionAprobador {
 
 const DecisionAprobadorSchema = SchemaFactory.createForClass(DecisionAprobador);
 
+/**
+ * Snapshot de un ciclo de aprobación completado.
+ * Se archiva en `intentos[]` cuando se reenvía una aprobación rechazada.
+ */
+@Schema({ _id: false })
+export class IntentoAprobacion {
+  @Prop({ required: true })
+  numero: number;
+
+  /** Snapshot de los aprobadores al cierre del ciclo. */
+  @Prop({ type: [DecisionAprobadorSchema], default: [] })
+  aprobadores: DecisionAprobador[];
+
+  @Prop({ required: true, enum: ['aprobada', 'rechazada', 'pendiente'] })
+  estadoFinal: string;
+
+  @Prop({ required: true })
+  fechaInicio: Date;
+
+  @Prop()
+  fechaFin: Date;
+}
+
+const IntentoAprobacionSchema = SchemaFactory.createForClass(IntentoAprobacion);
+
 @Schema({ timestamps: true, collection: 'aprobaciones' })
 export class Aprobacion {
-  @Prop({ required: true, enum: ['ordenes-pago', 'facturas', 'pagos'] })
+  @Prop({ required: true, enum: ['ordenes-pago', 'pagos', 'prestamos', 'compras-fx'] })
   entidad: string;
 
   @Prop({ required: true })
@@ -60,6 +85,24 @@ export class Aprobacion {
 
   @Prop({ type: Object })
   datosOperacion: Record<string, any>;
+
+  // ── Reenvío fields ──────────────────────────────────────────────────────────
+
+  /** Historial de ciclos de aprobación cerrados (snapshot al momento de reenvío). */
+  @Prop({ type: [IntentoAprobacionSchema], default: [] })
+  intentos: IntentoAprobacion[];
+
+  /** Cantidad de reenvíos restantes. Por defecto 1 (un solo reenvío habilitado). */
+  @Prop({ default: 1 })
+  reenviosRestantes: number;
+
+  /** Fecha en que se realizó el último reenvío. */
+  @Prop({ type: Date })
+  fechaReenvio: Date;
+
+  /** UserId de quien ejecutó el reenvío. */
+  @Prop()
+  reenviadoPor: string;
 }
 
 export const AprobacionSchema = SchemaFactory.createForClass(Aprobacion);

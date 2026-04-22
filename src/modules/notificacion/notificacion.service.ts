@@ -29,15 +29,23 @@ export class NotificacionService {
     return this.notifModel.create(data);
   }
 
-  async notifyUsersByRole(roles: string[], data: Omit<Parameters<typeof this.create>[0], 'usuario'>) {
+  async notifyUsersByRole(
+    roles: string[],
+    data: Omit<Parameters<typeof this.create>[0], 'usuario'>,
+    options: { sendEmail?: boolean } = { sendEmail: true },
+  ) {
     const users = await this.userModel.find({ role: { $in: roles }, activo: true });
     const notifications = users.map(u => ({ ...data, usuario: u._id.toString() }));
     if (notifications.length > 0) {
       await this.notifModel.insertMany(notifications);
     }
-    // Send email notifications (fire-and-forget)
-    for (const user of users) {
-      this.emailService.sendEmail(user.email, data.titulo, `<p>${data.mensaje}</p>`).catch(() => {});
+    // Email opcional — se desactiva cuando el caller ya manda un email propio
+    // más específico (ej: el magic-link de aprobación) y queremos evitar
+    // duplicados al mismo destinatario.
+    if (options.sendEmail !== false) {
+      for (const user of users) {
+        this.emailService.sendEmail(user.email, data.titulo, `<p>${data.mensaje}</p>`).catch(() => {});
+      }
     }
   }
 

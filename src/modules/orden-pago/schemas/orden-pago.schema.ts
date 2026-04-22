@@ -23,7 +23,8 @@ export class OrdenPago {
   @Prop({ default: 'ARS' })
   moneda: string;
 
-  @Prop({ default: 'pendiente', enum: ['pendiente', 'parcial', 'pagada', 'anulada'] })
+  // T016 — 'esperando_aprobacion' added for approval gate; 'anulada' is the rejected terminal state
+  @Prop({ default: 'pendiente', enum: ['pendiente', 'parcial', 'pagada', 'anulada', 'esperando_aprobacion'] })
   estado: string;
 
   @Prop({ type: [{ type: Types.ObjectId, ref: 'Factura' }] })
