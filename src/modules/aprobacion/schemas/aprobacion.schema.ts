@@ -53,7 +53,7 @@ const IntentoAprobacionSchema = SchemaFactory.createForClass(IntentoAprobacion);
 
 @Schema({ timestamps: true, collection: 'aprobaciones' })
 export class Aprobacion {
-  @Prop({ required: true, enum: ['ordenes-pago', 'pagos', 'prestamos', 'compras-fx'] })
+  @Prop({ required: true, enum: ['ordenes-pago', 'pagos', 'prestamos', 'compras-divisas'] })
   entidad: string;
 
   @Prop({ required: true })

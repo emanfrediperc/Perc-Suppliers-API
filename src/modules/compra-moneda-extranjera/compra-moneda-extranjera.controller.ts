@@ -24,7 +24,7 @@ import { EstimarEjecucionCompraMonedaExtranjeraDto } from './dto/estimar-ejecuci
 @ApiTags('CompraMonedaExtranjera')
 @ApiBearerAuth()
 @UseGuards(JwtAuthGuard, RolesGuard)
-@Controller('compras-moneda-extranjera')
+@Controller('compras-divisas')
 export class CompraMonedaExtranjeraController {
   constructor(private readonly service: CompraMonedaExtranjeraService) {}
 

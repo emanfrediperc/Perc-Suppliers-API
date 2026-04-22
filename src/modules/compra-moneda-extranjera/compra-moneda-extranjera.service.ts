@@ -116,7 +116,7 @@ export class CompraMonedaExtranjeraService {
 
         // Lanza BadRequestException si no hay aprobadores activos → aborta transacción
         await this.aprobacionService.createAprobacion({
-          entidad: 'compras-fx',
+          entidad: 'compras-divisas',
           entidadId: createdCompra!._id.toString(),
           tipo: 'creacion',
           monto: dto.montoOrigen,

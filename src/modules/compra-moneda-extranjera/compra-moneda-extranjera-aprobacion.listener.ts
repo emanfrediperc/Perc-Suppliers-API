@@ -24,7 +24,7 @@ export class CompraMonedaExtranjeraAprobacionListener {
   @OnEvent(APROBACION_RESUELTA)
   async handle(event: AprobacionResueltaEvent): Promise<void> {
     // Idempotencia: ignorar eventos de otras entidades
-    if (event.entidad !== 'compras-fx') return;
+    if (event.entidad !== 'compras-divisas') return;
 
     const compra = await this.model.findById(event.entidadId);
     if (!compra) return; // idempotencia: ya eliminada
@@ -44,7 +44,7 @@ export class CompraMonedaExtranjeraAprobacionListener {
   // Idempotente: solo actúa si el estado actual es ANULADA.
   @OnEvent(APROBACION_REENVIADA)
   async handleReenviada(event: AprobacionReenviadaEvent): Promise<void> {
-    if (event.entidad !== 'compras-fx') return;
+    if (event.entidad !== 'compras-divisas') return;
 
     const compra = await this.model.findById(event.entidadId);
     if (!compra) return;
