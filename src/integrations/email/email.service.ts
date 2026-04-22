@@ -13,7 +13,11 @@ export class EmailService {
   private resendApiKey = '';
 
   constructor(private config: ConfigService) {
-    this.from = this.config.get<string>('email.from') || 'noreply@perc-suppliers.com';
+    // Default al sandbox de Resend — funciona out-of-the-box con RESEND_API_KEY
+    // sin verificación de dominio (pero solo entrega al email del owner de la
+    // cuenta de Resend). Para producción real, setear EMAIL_FROM a una dirección
+    // de un dominio verificado.
+    this.from = this.config.get<string>('email.from') || 'onboarding@resend.dev';
 
     // Preferir la API HTTP de Resend si está configurada: funciona en entornos
     // donde el SMTP outbound está bloqueado (Railway suele bloquear 25/465/587).
