@@ -48,7 +48,7 @@ export class CompraMonedaExtranjeraController {
   }
 
   @Patch(':id/anular')
-  @Roles('admin', 'tesoreria', 'operador')
+  @Roles('admin', 'operador')
   anular(
     @Param('id') id: string,
     @Body() dto: AnularCompraMonedaExtranjeraDto,
@@ -58,7 +58,7 @@ export class CompraMonedaExtranjeraController {
   }
 
   @Patch(':id/ejecutar')
-  @Roles('admin', 'operador')
+  @Roles('operador')
   ejecutar(
     @Param('id') id: string,
     @Body() dto: EjecutarCompraMonedaExtranjeraDto,
@@ -68,7 +68,7 @@ export class CompraMonedaExtranjeraController {
   }
 
   @Patch(':id/estimar-ejecucion')
-  @Roles('admin', 'operador')
+  @Roles('operador')
   estimarEjecucion(
     @Param('id') id: string,
     @Body() dto: EstimarEjecucionCompraMonedaExtranjeraDto,
