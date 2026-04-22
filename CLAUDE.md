@@ -105,3 +105,22 @@ Factura (ingreso) -> OrdenPago (agrupacion) -> Pago (ejecucion con retenciones)
 ```
 
 Cada entidad puede tener un `finnegansId` para sincronizacion con el ERP.
+
+## Flujo de aprobacion (magic-link)
+
+Las entidades `prestamos`, `pagos`, `ordenes-pago` y `compras-fx` se crean en estado `esperando_aprobacion` y deben pasar por un ciclo de aprobacion antes de ejecutarse.
+
+**Magic-link** (feature-flagged con `ENABLE_MAGIC_LINK`, default `false`):
+- Al crear la solicitud, el sistema emite un token por aprobador y envia un email con link `{MAGIC_LINK_BASE_URL}?token=...` (TTL configurable via `MAGIC_LINK_TTL_HOURS`, default 48 h).
+- El aprobador hace click → el frontend llama `POST /api/v1/aprobaciones/decidir-via-token` (endpoint publico, sin JWT, rate-limited 10 req/min por IP).
+- Respuesta: `{ mensaje, estadoAprobacion }`.
+
+**Fallback con JWT** (siempre disponible):
+- `PATCH /api/v1/aprobaciones/:id/decidir` — requiere rol `aprobador` o `admin`.
+
+**Reenvio tras rechazo**:
+- El creador original puede llamar `PATCH /api/v1/aprobaciones/:id/reenviar` (rol `tesoreria` o `admin`).
+- La aprobacion debe estar `rechazada` y tener `reenviosRestantes > 0` (default 1).
+- El ciclo anterior queda archivado en el array `intentos[]`; se emiten nuevos tokens y se envian nuevos emails.
+
+**Modulo**: `src/modules/aprobacion/` — schema `Aprobacion`, service, controller (autenticado) y `aprobacion-public.controller.ts` (publico).

@@ -6,7 +6,7 @@ import {
   ServiceUnavailableException,
   UnauthorizedException,
 } from '@nestjs/common';
-import { ApiTags } from '@nestjs/swagger';
+import { ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
 import { Request } from 'express';
 import { ConfigService } from '@nestjs/config';
@@ -29,6 +29,22 @@ export class AprobacionPublicController {
 
   @Post('decidir-via-token')
   @Throttle({ default: { ttl: 60_000, limit: 10 } })
+  @ApiOperation({
+    summary: 'Decidir una aprobación vía magic-link token (público)',
+    description:
+      'Endpoint público (sin JWT) usado por el frontend al recibir el usuario un link por email. ' +
+      'Valida el token, registra la decisión, y marca el token como usado. ' +
+      'Rate-limited a 10 req/min por IP. Devuelve 503 si ENABLE_MAGIC_LINK=false.',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Decisión registrada',
+    schema: { example: { mensaje: 'Decisión registrada', estadoAprobacion: 'aprobada' } },
+  })
+  @ApiResponse({ status: 400, description: 'Body inválido (class-validator)' })
+  @ApiResponse({ status: 401, description: 'Token inválido o expirado (mensaje genérico, no filtra si existe)' })
+  @ApiResponse({ status: 429, description: 'Rate limit excedido' })
+  @ApiResponse({ status: 503, description: 'Funcionalidad deshabilitada (ENABLE_MAGIC_LINK=false)' })
   async decidirViaToken(
     @Body() dto: DecidirViaTokenDto,
     @Req() req: Request,

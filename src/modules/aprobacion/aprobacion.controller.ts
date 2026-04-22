@@ -1,5 +1,5 @@
 import { Controller, Get, Patch, Param, Body, Query, Res, UseGuards } from '@nestjs/common';
-import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
+import { ApiBearerAuth, ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
 import * as express from 'express';
 import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../../auth/guards/roles.guard';
@@ -92,7 +92,17 @@ export class AprobacionController {
    */
   @Patch(':id/reenviar')
   @Roles('admin', 'tesoreria')
-  @ApiOperation({ summary: 'Reenviar una aprobación rechazada al aprobador' })
+  @ApiOperation({
+    summary: 'Reenviar una aprobación rechazada al aprobador',
+    description:
+      'Solo quien creó la solicitud (tesorería o admin) puede reenviarla. ' +
+      'La aprobación debe estar en estado `rechazada` y tener `reenviosRestantes > 0`. ' +
+      'El ciclo anterior se snapshotea en `intentos[]`; se emiten nuevos tokens y se envían nuevos emails.',
+  })
+  @ApiResponse({ status: 200, description: 'Aprobación reenviada — nuevo ciclo pendiente' })
+  @ApiResponse({ status: 400, description: 'Estado inválido, sin reenvíos restantes, o sin aprobadores activos' })
+  @ApiResponse({ status: 403, description: 'El usuario no es el creador original' })
+  @ApiResponse({ status: 404, description: 'Aprobación no encontrada' })
   reenviar(@Param('id') id: string, @CurrentUser() user: any) {
     return this.service.reenviar(id, {
       userId: user.userId,
