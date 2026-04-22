@@ -249,9 +249,11 @@ export class AprobacionService {
     // Mapear decision del DTO al valor interno del dominio
     const decisionInterna = decision === 'aprobar' ? 'aprobada' : 'rechazada';
 
+    const aprobacionIdStr = tokenDoc.aprobacionId.toString();
+
     // Delegar al método decidir existente (evita duplicar lógica de transición de estado)
     const aprobacion = await this.decidir(
-      tokenDoc.aprobacionId,
+      aprobacionIdStr,
       { userId, email: user.email, nombre: user.nombre },
       decisionInterna,
       comentario,
@@ -266,10 +268,10 @@ export class AprobacionService {
       usuarioEmail: user.email,
       accion: 'decidir-via-token',
       entidad: 'aprobaciones',
-      entidadId: tokenDoc.aprobacionId,
+      entidadId: aprobacionIdStr,
       cambios: { decision: decisionInterna, comentario: comentario ?? '' },
       ip,
-      descripcion: `${user.email} - decidir-via-token aprobaciones ${tokenDoc.aprobacionId}`,
+      descripcion: `${user.email} - decidir-via-token aprobaciones ${aprobacionIdStr}`,
     }).catch(() => {});
 
     return aprobacion;

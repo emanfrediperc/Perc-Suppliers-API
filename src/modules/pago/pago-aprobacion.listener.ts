@@ -5,9 +5,9 @@ import { OnEvent } from '@nestjs/event-emitter';
 import { Pago, PagoDocument } from './schemas/pago.schema';
 import {
   APROBACION_RESUELTA,
-  AprobacionResueltaEvent,
   APROBACION_REENVIADA,
-  AprobacionReenviadaEvent,
+  type AprobacionResueltaEvent,
+  type AprobacionReenviadaEvent,
 } from '../aprobacion/events/aprobacion-resuelta.event';
 
 @Injectable()

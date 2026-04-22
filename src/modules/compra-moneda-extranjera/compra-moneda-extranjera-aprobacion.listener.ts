@@ -9,9 +9,9 @@ import {
 import { EstadoCompraMonedaExtranjera } from './enums/estado-compra.enum';
 import {
   APROBACION_RESUELTA,
-  AprobacionResueltaEvent,
   APROBACION_REENVIADA,
-  AprobacionReenviadaEvent,
+  type AprobacionResueltaEvent,
+  type AprobacionReenviadaEvent,
 } from '../aprobacion/events/aprobacion-resuelta.event';
 
 @Injectable()

@@ -10,7 +10,7 @@ import {
 } from '@nestjs/common';
 import { ApiOperation, ApiResponse, ApiTags, ApiParam } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
-import { Request } from 'express';
+import type { Request } from 'express';
 import { ConfigService } from '@nestjs/config';
 import { AprobacionService } from './aprobacion.service';
 import { DecidirViaTokenDto } from './dto/decidir-via-token.dto';

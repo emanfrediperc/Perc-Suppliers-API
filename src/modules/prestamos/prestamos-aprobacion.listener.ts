@@ -6,9 +6,9 @@ import { Prestamo, PrestamoDocument } from './schemas/prestamo.schema';
 import { PrestamoStatus } from './enums/prestamo-status.enum';
 import {
   APROBACION_RESUELTA,
-  AprobacionResueltaEvent,
   APROBACION_REENVIADA,
-  AprobacionReenviadaEvent,
+  type AprobacionResueltaEvent,
+  type AprobacionReenviadaEvent,
 } from '../aprobacion/events/aprobacion-resuelta.event';
 
 @Injectable()
