@@ -177,7 +177,7 @@ export class EmailService {
           <!-- Header -->
           <tr>
             <td style="background: linear-gradient(135deg, #6366f1 0%, #4f46e5 100%); padding: 28px 32px;">
-              <div style="color: rgba(255,255,255,0.82); font-size: 12px; font-weight: 600; letter-spacing: 1px; text-transform: uppercase; margin-bottom: 6px;">Perc Suppliers</div>
+              <div style="color: rgba(255,255,255,0.82); font-size: 12px; font-weight: 600; letter-spacing: 1px; text-transform: uppercase; margin-bottom: 6px;">Beethoven</div>
               <div style="color: #ffffff; font-size: 22px; font-weight: 700; line-height: 1.2;">Aprobación pendiente</div>
             </td>
           </tr>
@@ -250,7 +250,7 @@ export class EmailService {
           <tr>
             <td style="padding: 0 8px; text-align: center; color: #9ca3af; font-size: 11px; line-height: 1.5;">
               Si no esperabas este correo, podés ignorarlo — la solicitud no se aprobará sin tu acción.<br>
-              Perc Suppliers · Aprobaciones
+              Beethoven · Aprobaciones
             </td>
           </tr>
         </table>
