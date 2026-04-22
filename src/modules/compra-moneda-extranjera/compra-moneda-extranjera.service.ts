@@ -120,7 +120,7 @@ export class CompraMonedaExtranjeraService {
           entidadId: createdCompra!._id.toString(),
           tipo: 'creacion',
           monto: dto.montoOrigen,
-          descripcion: `Compra FX ${empresa.razonSocialCache} ${dto.monedaOrigen}→${dto.monedaDestino} ${new Intl.NumberFormat('es-AR').format(dto.montoOrigen)}`,
+          descripcion: `Compra de Divisa ${empresa.razonSocialCache} ${dto.monedaOrigen}→${dto.monedaDestino} ${new Intl.NumberFormat('es-AR').format(dto.montoOrigen)}`,
           createdBy: currentUser.userId,
           createdByEmail: currentUser.email,
           datosOperacion: { ...dto },
