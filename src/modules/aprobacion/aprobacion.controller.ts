@@ -108,6 +108,7 @@ export class AprobacionController {
       userId: user.userId,
       email: user.email,
       nombre: user.nombre,
+      role: user.role,
     });
   }
 

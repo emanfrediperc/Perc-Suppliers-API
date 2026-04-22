@@ -286,13 +286,14 @@ export class AprobacionService {
    */
   async reenviar(
     aprobacionId: string,
-    user: { userId: string; email: string; nombre?: string },
+    user: { userId: string; email: string; nombre?: string; role?: string },
   ): Promise<AprobacionDocument> {
     const aprobacion = await this.aprobacionModel.findById(aprobacionId);
     if (!aprobacion) throw new NotFoundException('Aprobacion no encontrada');
 
-    // Validación 1: solo el creador puede reenviar (decisión a1)
-    if (aprobacion.createdBy !== user.userId) {
+    // Validación 1: solo el creador (o admin) puede reenviar (decisión a1).
+    // Admin puede reenviar cualquier aprobación por ser rol de soporte/override.
+    if (user.role !== 'admin' && aprobacion.createdBy !== user.userId) {
       throw new ForbiddenException('Solo quien creó la solicitud puede reenviarla');
     }
 

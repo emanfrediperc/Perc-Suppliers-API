@@ -11,7 +11,18 @@ export class AuditLog {
   @Prop({ required: true })
   usuarioEmail: string;
 
-  @Prop({ required: true, enum: ['crear', 'editar', 'eliminar', 'pagar', 'anular', 'aprobar', 'rechazar', 'login', 'sync', 'cancelar', 'renovar'] })
+  @Prop({
+    required: true,
+    enum: [
+      'crear', 'editar', 'eliminar',
+      'pagar', 'anular', 'cancelar', 'renovar',
+      'aprobar', 'rechazar',
+      'login', 'sync',
+      'token-emitido', 'token-emitido-reenvio',
+      'decidir-via-token',
+      'aprobacion-reenviada', 'rechazo-terminal',
+    ],
+  })
   accion: string;
 
   @Prop({ required: true })
