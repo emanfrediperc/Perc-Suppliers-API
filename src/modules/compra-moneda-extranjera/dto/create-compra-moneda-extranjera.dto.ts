@@ -11,7 +11,7 @@ import {
   MinLength,
 } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { ModalidadCompra } from '../enums/modalidad-compra.enum';
+import { Moneda } from '../enums/moneda.enum';
 import type { EmpresaKind } from '../schemas/compra-moneda-extranjera.schema';
 
 export class CreateCompraMonedaExtranjeraDto {
@@ -19,9 +19,13 @@ export class CreateCompraMonedaExtranjeraDto {
   @IsDateString()
   fechaSolicitada: string;
 
-  @ApiProperty({ enum: ModalidadCompra, example: ModalidadCompra.CABLE })
-  @IsEnum(ModalidadCompra)
-  modalidad: ModalidadCompra;
+  @ApiProperty({ enum: Moneda, example: Moneda.ARS })
+  @IsEnum(Moneda)
+  monedaOrigen: Moneda;
+
+  @ApiProperty({ enum: Moneda, example: Moneda.USD_CABLE })
+  @IsEnum(Moneda)
+  monedaDestino: Moneda;
 
   @ApiProperty({ example: '65abc1234567890abcdef012' })
   @IsMongoId()
@@ -31,10 +35,10 @@ export class CreateCompraMonedaExtranjeraDto {
   @IsIn(['cliente', 'proveedora'])
   empresaKind: EmpresaKind;
 
-  @ApiProperty({ example: 10000 })
+  @ApiProperty({ example: 12500000 })
   @IsNumber()
   @Min(0.01)
-  montoUSD: number;
+  montoOrigen: number;
 
   @ApiPropertyOptional({ example: 1250 })
   @IsOptional()
@@ -42,11 +46,11 @@ export class CreateCompraMonedaExtranjeraDto {
   @Min(0.0001)
   tipoCambio?: number;
 
-  @ApiPropertyOptional({ example: 12500000 })
+  @ApiPropertyOptional({ example: 10000 })
   @IsOptional()
   @IsNumber()
   @Min(0)
-  montoARS?: number;
+  montoDestino?: number;
 
   @ApiPropertyOptional({ example: 'Banco Nación' })
   @IsOptional()

@@ -1,6 +1,6 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { Document, Types } from 'mongoose';
-import { ModalidadCompra } from '../enums/modalidad-compra.enum';
+import { Moneda } from '../enums/moneda.enum';
 import { EstadoCompraMonedaExtranjera } from '../enums/estado-compra.enum';
 
 export type EmpresaKind = 'cliente' | 'proveedora';
@@ -32,20 +32,23 @@ export class CompraMonedaExtranjera {
   @Prop()
   fechaEjecutada?: Date;
 
-  @Prop({ type: String, enum: ModalidadCompra, required: true })
-  modalidad: ModalidadCompra;
+  @Prop({ type: String, enum: Moneda, required: true })
+  monedaOrigen: Moneda;
+
+  @Prop({ type: String, enum: Moneda, required: true })
+  monedaDestino: Moneda;
 
   @Prop({ type: EmpresaRefSchema, required: true })
   empresa: EmpresaRef;
 
   @Prop({ required: true, min: 0.01 })
-  montoUSD: number;
+  montoOrigen: number;
 
   @Prop({ min: 0.0001 })
   tipoCambio?: number;
 
   @Prop({ min: 0 })
-  montoARS?: number;
+  montoDestino?: number;
 
   @Prop()
   contraparte?: string;
@@ -90,7 +93,7 @@ export const CompraMonedaExtranjeraSchema = SchemaFactory.createForClass(CompraM
 CompraMonedaExtranjeraSchema.set('optimisticConcurrency', true);
 
 CompraMonedaExtranjeraSchema.index({ fechaSolicitada: -1 });
-CompraMonedaExtranjeraSchema.index({ modalidad: 1 });
+CompraMonedaExtranjeraSchema.index({ monedaOrigen: 1, monedaDestino: 1 });
 CompraMonedaExtranjeraSchema.index({ 'empresa.empresaId': 1 });
 CompraMonedaExtranjeraSchema.index({ 'empresa.empresaId': 1, fechaSolicitada: -1 });
 CompraMonedaExtranjeraSchema.index({ estado: 1 });

@@ -1,14 +1,19 @@
 import { IsDateString, IsEnum, IsInt, IsMongoId, IsOptional, Min, Max } from 'class-validator';
 import { Type } from 'class-transformer';
 import { ApiPropertyOptional } from '@nestjs/swagger';
-import { ModalidadCompra } from '../enums/modalidad-compra.enum';
+import { Moneda } from '../enums/moneda.enum';
 import { EstadoCompraMonedaExtranjera } from '../enums/estado-compra.enum';
 
 export class QueryComprasMonedaExtranjeraDto {
-  @ApiPropertyOptional({ enum: ModalidadCompra })
+  @ApiPropertyOptional({ enum: Moneda })
   @IsOptional()
-  @IsEnum(ModalidadCompra)
-  modalidad?: ModalidadCompra;
+  @IsEnum(Moneda)
+  monedaOrigen?: Moneda;
+
+  @ApiPropertyOptional({ enum: Moneda })
+  @IsOptional()
+  @IsEnum(Moneda)
+  monedaDestino?: Moneda;
 
   @ApiPropertyOptional({ enum: EstadoCompraMonedaExtranjera })
   @IsOptional()

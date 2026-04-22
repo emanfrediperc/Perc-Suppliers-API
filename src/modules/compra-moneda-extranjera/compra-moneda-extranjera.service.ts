@@ -72,15 +72,22 @@ export class CompraMonedaExtranjeraService {
     dto: CreateCompraMonedaExtranjeraDto,
     userId: string,
   ): Promise<CompraMonedaExtranjeraDocument> {
+    if (dto.monedaOrigen === dto.monedaDestino) {
+      throw new UnprocessableEntityException(
+        'La moneda de origen y destino deben ser distintas',
+      );
+    }
+
     const empresa = await this.resolveEmpresa(dto.empresaId, dto.empresaKind);
 
     const compra = new this.model({
       fechaSolicitada: new Date(dto.fechaSolicitada),
-      modalidad: dto.modalidad,
+      monedaOrigen: dto.monedaOrigen,
+      monedaDestino: dto.monedaDestino,
       empresa,
-      montoUSD: dto.montoUSD,
+      montoOrigen: dto.montoOrigen,
       tipoCambio: dto.tipoCambio,
-      montoARS: dto.montoARS,
+      montoDestino: dto.montoDestino,
       contraparte: dto.contraparte,
       comision: dto.comision ?? 0,
       referencia: dto.referencia,
@@ -95,7 +102,8 @@ export class CompraMonedaExtranjeraService {
   async findAll(query: QueryComprasMonedaExtranjeraDto): Promise<PaginatedCompras> {
     const filter: Record<string, unknown> = {};
 
-    if (query.modalidad !== undefined) filter.modalidad = query.modalidad;
+    if (query.monedaOrigen !== undefined) filter.monedaOrigen = query.monedaOrigen;
+    if (query.monedaDestino !== undefined) filter.monedaDestino = query.monedaDestino;
     if (query.estado !== undefined) filter.estado = query.estado;
     if (query.empresaId) {
       filter['empresa.empresaId'] = new Types.ObjectId(query.empresaId);
