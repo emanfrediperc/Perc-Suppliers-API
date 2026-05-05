@@ -1,6 +1,6 @@
 import { Controller, Get, Post, Patch, Param, Body, Query, Res, UseGuards, UseInterceptors, UploadedFile, BadRequestException, NotFoundException } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
-import { ApiBearerAuth, ApiTags, ApiConsumes } from '@nestjs/swagger';
+import { ApiBearerAuth, ApiTags, ApiConsumes, ApiOperation } from '@nestjs/swagger';
 import * as express from 'express';
 import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../../auth/guards/roles.guard';
@@ -150,6 +150,11 @@ export class FacturaController {
 
   @Post(':id/pagar')
   @Roles('admin', 'tesoreria', 'operador')
+  @ApiOperation({
+    deprecated: true,
+    summary: 'DEPRECATED — usar POST /api/v1/solicitudes-pago',
+    description: 'Reemplazado por el flujo de SolicitudPago. Queda como escape hatch para correcciones manuales.',
+  })
   pagar(@Param('id') id: string, @Body() dto: PagarFacturaDto) { return this.service.pagar(id, dto); }
 
   private validateFile(file: Express.Multer.File) {

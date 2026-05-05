@@ -1,5 +1,5 @@
 import { Controller, Get, Post, Patch, Param, Body, Query, Res, Req, UseGuards } from '@nestjs/common';
-import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
+import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import * as express from 'express';
 import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../../auth/guards/roles.guard';
@@ -18,6 +18,11 @@ export class PagoController {
 
   @Post()
   @Roles('admin', 'tesoreria')
+  @ApiOperation({
+    deprecated: true,
+    summary: 'DEPRECATED — usar POST /api/v1/solicitudes-pago',
+    description: 'El flujo de creación directa de Pago fue reemplazado por SolicitudPago (workflow con aprobación de contabilidad). Este endpoint queda como escape hatch para correcciones manuales y será removido en una versión futura.',
+  })
   create(@Body() dto: CreatePagoDto, @Req() req: any) {
     return this.service.create(dto, { userId: req.user.userId, email: req.user.email });
   }

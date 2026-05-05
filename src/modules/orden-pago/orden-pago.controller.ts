@@ -1,5 +1,5 @@
 import { Controller, Get, Post, Patch, Param, Body, Query, Res, Req, UseGuards } from '@nestjs/common';
-import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
+import { ApiBearerAuth, ApiTags, ApiOperation } from '@nestjs/swagger';
 import * as express from 'express';
 import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../../auth/guards/roles.guard';
@@ -85,6 +85,11 @@ export class OrdenPagoController {
 
   @Post('pagar-lote')
   @Roles('admin', 'tesoreria', 'operador')
+  @ApiOperation({
+    deprecated: true,
+    summary: 'DEPRECATED — usar POST /api/v1/solicitudes-pago por orden',
+    description: 'El flujo de pago directo a múltiples órdenes fue reemplazado por SolicitudPago. Mantener como escape hatch.',
+  })
   pagarLote(@Body() dto: PagarLoteDto) { return this.service.pagarLote(dto.pagos); }
 
   @Patch(':id/deactivate')
@@ -93,6 +98,11 @@ export class OrdenPagoController {
 
   @Post(':id/pagar')
   @Roles('admin', 'tesoreria', 'operador')
+  @ApiOperation({
+    deprecated: true,
+    summary: 'DEPRECATED — usar POST /api/v1/solicitudes-pago con ordenPago',
+    description: 'Reemplazado por SolicitudPago (workflow con aprobación de contabilidad).',
+  })
   pagar(@Param('id') id: string, @Body() dto: PagarOrdenDto) { return this.service.pagar(id, dto); }
 
   @Post('sync-finnegans')
