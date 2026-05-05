@@ -55,8 +55,11 @@ const HistorialEntrySchema = SchemaFactory.createForClass(HistorialEntry);
 
 @Schema({ timestamps: true, collection: 'solicitudes_pago' })
 export class SolicitudPago {
-  @Prop({ type: Types.ObjectId, ref: 'Factura', required: true, index: true })
-  factura: Types.ObjectId;
+  @Prop({ type: Types.ObjectId, ref: 'Factura', index: true })
+  factura?: Types.ObjectId;
+
+  @Prop({ type: Types.ObjectId, ref: 'OrdenPago', index: true })
+  ordenPago?: Types.ObjectId;
 
   @Prop({ type: Types.ObjectId, ref: 'EmpresaProveedora', required: true, index: true })
   empresaProveedora: Types.ObjectId;
@@ -113,3 +116,11 @@ export class SolicitudPago {
 export const SolicitudPagoSchema = SchemaFactory.createForClass(SolicitudPago);
 SolicitudPagoSchema.index({ estado: 1, fechaVencimiento: 1 });
 SolicitudPagoSchema.index({ factura: 1, estado: 1 });
+SolicitudPagoSchema.index({ ordenPago: 1, estado: 1 });
+SolicitudPagoSchema.pre('validate', function () {
+  const hasFactura = !!this.get('factura');
+  const hasOrden = !!this.get('ordenPago');
+  if (hasFactura === hasOrden) {
+    this.invalidate('factura', 'Debe especificarse exactamente uno: factura u ordenPago');
+  }
+});

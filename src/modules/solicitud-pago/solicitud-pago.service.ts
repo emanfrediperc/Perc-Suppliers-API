@@ -9,6 +9,7 @@ import {
 } from './schemas/solicitud-pago.schema';
 import { Factura, FacturaDocument } from '../factura/schemas/factura.schema';
 import { Pago, PagoDocument } from '../pago/schemas/pago.schema';
+import { OrdenPago, OrdenPagoDocument } from '../orden-pago/schemas/orden-pago.schema';
 import { Convenio, ConvenioDocument } from '../convenio/schemas/convenio.schema';
 import { User, UserDocument } from '../../auth/schemas/user.schema';
 import { CreateSolicitudPagoDto } from './dto/create-solicitud-pago.dto';
@@ -39,6 +40,7 @@ export class SolicitudPagoService {
     @InjectModel(SolicitudPago.name) private solicitudModel: Model<SolicitudPagoDocument>,
     @InjectModel(Factura.name) private facturaModel: Model<FacturaDocument>,
     @InjectModel(Pago.name) private pagoModel: Model<PagoDocument>,
+    @InjectModel(OrdenPago.name) private ordenModel: Model<OrdenPagoDocument>,
     @InjectModel(Convenio.name) private convenioModel: Model<ConvenioDocument>,
     @InjectModel(User.name) private userModel: Model<UserDocument>,
     private storageService: StorageService,
@@ -48,26 +50,49 @@ export class SolicitudPagoService {
   ) {}
 
   async create(dto: CreateSolicitudPagoDto, user: AuthUser): Promise<SolicitudPagoDocument> {
-    const factura = await this.facturaModel.findById(dto.factura);
-    if (!factura) throw new NotFoundException('Factura no encontrada');
-    if (factura.estado === 'anulada' || factura.estado === 'pagada') {
-      throw new BadRequestException(`Factura está ${factura.estado}, no admite solicitud de pago`);
-    }
-    if (dto.monto > factura.saldoPendiente) {
-      throw new BadRequestException(`Monto excede saldo pendiente (${factura.saldoPendiente})`);
+    if (!dto.factura === !dto.ordenPago) {
+      throw new BadRequestException('Debe especificarse exactamente uno: factura u ordenPago');
     }
     if (dto.tipo === 'compromiso') {
       if (!dto.fechaVencimiento) throw new BadRequestException('Compromiso requiere fechaVencimiento');
-      const fv = new Date(dto.fechaVencimiento);
-      if (fv.getTime() <= Date.now()) {
+      if (new Date(dto.fechaVencimiento).getTime() <= Date.now()) {
         throw new BadRequestException('fechaVencimiento debe ser futura');
       }
     }
 
+    let empresaProveedora: Types.ObjectId;
+    let saldoDisponible: number;
+    let displayRef: string;
+
+    if (dto.factura) {
+      const factura = await this.facturaModel.findById(dto.factura);
+      if (!factura) throw new NotFoundException('Factura no encontrada');
+      if (factura.estado === 'anulada' || factura.estado === 'pagada') {
+        throw new BadRequestException(`Factura está ${factura.estado}, no admite solicitud de pago`);
+      }
+      empresaProveedora = factura.empresaProveedora;
+      saldoDisponible = factura.saldoPendiente;
+      displayRef = `Factura ${factura.numero}`;
+    } else {
+      const orden = await this.ordenModel.findById(dto.ordenPago);
+      if (!orden) throw new NotFoundException('Orden de pago no encontrada');
+      if (orden.estado === 'anulada' || orden.estado === 'pagada') {
+        throw new BadRequestException(`Orden está ${orden.estado}, no admite solicitud de pago`);
+      }
+      empresaProveedora = orden.empresaProveedora as any;
+      saldoDisponible = orden.saldoPendiente;
+      displayRef = `Orden ${orden.numero}`;
+    }
+
+    if (dto.monto > saldoDisponible) {
+      throw new BadRequestException(`Monto excede saldo pendiente (${saldoDisponible})`);
+    }
+
     const ahora = new Date();
     const solicitud = await this.solicitudModel.create({
-      factura: factura._id,
-      empresaProveedora: factura.empresaProveedora,
+      factura: dto.factura ? new Types.ObjectId(dto.factura) : undefined,
+      ordenPago: dto.ordenPago ? new Types.ObjectId(dto.ordenPago) : undefined,
+      empresaProveedora,
       tipo: dto.tipo,
       monto: dto.monto,
       fechaVencimiento: dto.fechaVencimiento ? new Date(dto.fechaVencimiento) : undefined,
@@ -84,7 +109,7 @@ export class SolicitudPagoService {
       }],
     });
 
-    this.notificarContabilidad(solicitud, factura).catch(err =>
+    this.notificarContabilidad(solicitud, displayRef).catch(err =>
       this.logger.warn(`No se pudo notificar a contabilidad: ${err.message}`),
     );
 
@@ -97,12 +122,14 @@ export class SolicitudPagoService {
     if (filter.estado) q.estado = filter.estado;
     if (filter.tipo) q.tipo = filter.tipo;
     if (filter.factura) q.factura = new Types.ObjectId(filter.factura);
+    if (filter.ordenPago) q.ordenPago = new Types.ObjectId(filter.ordenPago);
     if (filter.empresaProveedora) q.empresaProveedora = new Types.ObjectId(filter.empresaProveedora);
 
     const [data, total] = await Promise.all([
       this.solicitudModel
         .find(q)
         .populate('factura', 'numero tipo fecha montoTotal saldoPendiente')
+        .populate('ordenPago', 'numero fecha montoTotal saldoPendiente')
         .populate('empresaProveedora', 'razonSocial cuit')
         .populate('createdBy.user', 'nombre apellido email')
         .populate('aprobadoPor.user', 'nombre apellido email')
@@ -120,6 +147,7 @@ export class SolicitudPagoService {
     const sol = await this.solicitudModel
       .findById(id)
       .populate('factura')
+      .populate('ordenPago')
       .populate('empresaProveedora', 'razonSocial cuit')
       .populate('createdBy.user', 'nombre apellido email')
       .populate('aprobadoPor.user', 'nombre apellido email')
@@ -202,6 +230,7 @@ export class SolicitudPagoService {
     // Crear el Pago real
     const pago = await this.pagoModel.create({
       factura: sol.factura,
+      ordenPago: sol.ordenPago,
       fechaPago: ahora,
       montoBase: sol.monto,
       retencionIIBB: dto.retencionIIBB || 0,
@@ -221,18 +250,10 @@ export class SolicitudPagoService {
       estado: 'confirmado',
     });
 
-    // Recalcular saldo de factura
-    const factura = await this.facturaModel.findById(sol.factura);
-    if (factura) {
-      const pagosActivos = await this.pagoModel
-        .find({ factura: factura._id, estado: { $nin: ['anulado', 'rechazado'] } })
-        .lean();
-      const montoPagado = pagosActivos.reduce((sum, p) => sum + p.montoBase, 0);
-      factura.montoPagado = montoPagado;
-      factura.saldoPendiente = Math.max(0, factura.montoTotal - montoPagado);
-      if (factura.saldoPendiente <= 0) factura.estado = 'pagada';
-      else if (montoPagado > 0) factura.estado = 'parcial';
-      await factura.save();
+    if (sol.factura) {
+      await this.recalcFacturaSaldo(sol.factura);
+    } else if (sol.ordenPago) {
+      await this.aplicarPagoAOrden(sol.ordenPago, sol.monto, pago._id as any);
     }
 
     // Cerrar la solicitud
@@ -331,9 +352,55 @@ export class SolicitudPagoService {
     }
   }
 
+  private async recalcFacturaSaldo(facturaId: any): Promise<void> {
+    const factura = await this.facturaModel.findById(facturaId);
+    if (!factura) return;
+    const pagosActivos = await this.pagoModel
+      .find({ factura: factura._id, estado: { $nin: ['anulado', 'rechazado'] } })
+      .lean();
+    const montoPagado = pagosActivos.reduce((sum, p) => sum + p.montoBase, 0);
+    factura.montoPagado = montoPagado;
+    factura.saldoPendiente = Math.max(0, factura.montoTotal - montoPagado);
+    if (factura.saldoPendiente <= 0) factura.estado = 'pagada';
+    else if (montoPagado > 0) factura.estado = 'parcial';
+    await factura.save();
+  }
+
+  private async aplicarPagoAOrden(ordenId: any, monto: number, pagoId: Types.ObjectId): Promise<void> {
+    const orden = await this.ordenModel.findById(ordenId).populate('facturas');
+    if (!orden) return;
+
+    orden.montoPagado = (orden.montoPagado || 0) + monto;
+    orden.saldoPendiente = Math.max(0, orden.montoTotal - orden.montoPagado);
+    (orden.pagos as any[]).push(pagoId);
+    orden.estado = orden.saldoPendiente <= 0 ? 'pagada' : 'parcial';
+    await orden.save();
+
+    // Distribuir el monto entre las facturas pendientes (más viejas primero)
+    let restante = monto;
+    const facturasPendientes = (orden.facturas as any[])
+      .filter((f: any) => f.estado !== 'pagada' && f.estado !== 'anulada')
+      .sort((a: any, b: any) => new Date(a.fecha).getTime() - new Date(b.fecha).getTime());
+
+    for (const factura of facturasPendientes) {
+      if (restante <= 0) break;
+      const aplicar = Math.min(restante, factura.saldoPendiente);
+      factura.montoPagado += aplicar;
+      factura.saldoPendiente = Math.max(0, factura.montoTotal - factura.montoPagado);
+      if (factura.saldoPendiente <= 0) {
+        factura.saldoPendiente = 0;
+        factura.estado = 'pagada';
+      } else {
+        factura.estado = 'parcial';
+      }
+      await factura.save();
+      restante -= aplicar;
+    }
+  }
+
   private async notificarContabilidad(
     sol: SolicitudPagoDocument,
-    factura: FacturaDocument,
+    displayRef: string,
   ): Promise<void> {
     const recipients = await this.userModel
       .find({ role: 'contabilidad', activo: true })
@@ -357,7 +424,7 @@ export class SolicitudPagoService {
       <h2>Nueva ${tipoLabel} pendiente</h2>
       <p>Se generó una solicitud que requiere tu aprobación.</p>
       <table cellpadding="6" style="border-collapse:collapse;font-family:sans-serif;font-size:14px">
-        <tr><td><strong>Factura:</strong></td><td>${factura.numero}</td></tr>
+        <tr><td><strong>Referencia:</strong></td><td>${displayRef}</td></tr>
         <tr><td><strong>Tipo:</strong></td><td>${tipoLabel}</td></tr>
         <tr><td><strong>Monto:</strong></td><td>${monto}</td></tr>
         ${sol.tipo === 'compromiso' ? `<tr><td><strong>Fecha vencimiento:</strong></td><td>${fechaVenc}</td></tr>` : ''}

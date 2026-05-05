@@ -4,7 +4,11 @@ import { TIPOS_SOLICITUD, MEDIOS_PAGO } from '../schemas/solicitud-pago.schema';
 import type { TipoSolicitud, MedioPago } from '../schemas/solicitud-pago.schema';
 
 export class CreateSolicitudPagoDto {
-  @ApiProperty() @IsMongoId() @IsNotEmpty() factura: string;
+  @ApiPropertyOptional({ description: 'Requerido si no se envía ordenPago' })
+  @ValidateIf(o => !o.ordenPago) @IsMongoId() @IsNotEmpty() factura?: string;
+
+  @ApiPropertyOptional({ description: 'Requerido si no se envía factura' })
+  @ValidateIf(o => !o.factura) @IsMongoId() @IsNotEmpty() ordenPago?: string;
 
   @ApiProperty({ enum: TIPOS_SOLICITUD }) @IsEnum(TIPOS_SOLICITUD) tipo: TipoSolicitud;
 

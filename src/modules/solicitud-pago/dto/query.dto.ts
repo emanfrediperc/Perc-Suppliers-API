@@ -12,6 +12,7 @@ export class SolicitudPagoQueryDto {
   @IsOptional() @IsEnum(TIPOS_SOLICITUD) tipo?: TipoSolicitud;
 
   @ApiPropertyOptional() @IsOptional() @IsMongoId() factura?: string;
+  @ApiPropertyOptional() @IsOptional() @IsMongoId() ordenPago?: string;
   @ApiPropertyOptional() @IsOptional() @IsMongoId() empresaProveedora?: string;
 
   @ApiPropertyOptional() @IsOptional() @Type(() => Number) @IsInt() @Min(1) page?: number = 1;
