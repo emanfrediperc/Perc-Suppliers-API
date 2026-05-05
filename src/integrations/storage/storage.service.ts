@@ -28,9 +28,9 @@ export class StorageService {
     return basename.replace(/[^a-zA-Z0-9._-]/g, '_');
   }
 
-  async upload(file: Express.Multer.File): Promise<{ url: string; key: string }> {
+  async upload(file: Express.Multer.File, prefix = 'facturas'): Promise<{ url: string; key: string }> {
     const safeName = this.sanitizeFilename(file.originalname);
-    const key = `facturas/${Date.now()}-${safeName}`;
+    const key = `${prefix}/${Date.now()}-${safeName}`;
     await this.s3.send(new PutObjectCommand({
       Bucket: this.bucket,
       Key: key,
