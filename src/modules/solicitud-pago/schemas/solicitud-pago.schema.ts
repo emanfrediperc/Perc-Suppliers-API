@@ -50,6 +50,12 @@ class HistorialEntry {
   @Prop() fechaAnterior?: Date;
   @Prop() fechaNueva?: Date;
   @Prop({ required: true }) fecha: Date;
+
+  // Hash encadenado: sha256(prevHash + canonical(entry))
+  @Prop({ required: true }) hash: string;
+  // RFC 3161 timestamp token (base64 DER) — best-effort, puede faltar si TSA no responde
+  @Prop() tsaToken?: string;
+  @Prop() tsaError?: string;
 }
 const HistorialEntrySchema = SchemaFactory.createForClass(HistorialEntry);
 

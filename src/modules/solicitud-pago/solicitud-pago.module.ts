@@ -11,6 +11,8 @@ import { SolicitudPagoController } from './solicitud-pago.controller';
 import { StorageModule } from '../../integrations/storage/storage.module';
 import { EmailModule } from '../../integrations/email/email.module';
 import { PagoCalculatorService } from '../../common/services/pago-calculator.service';
+import { HashChainService } from './hash-chain.service';
+import { TsaClient } from './tsa.client';
 
 @Module({
   imports: [
@@ -26,7 +28,7 @@ import { PagoCalculatorService } from '../../common/services/pago-calculator.ser
     ]),
   ],
   controllers: [SolicitudPagoController],
-  providers: [SolicitudPagoService, PagoCalculatorService],
+  providers: [SolicitudPagoService, PagoCalculatorService, HashChainService, TsaClient],
   exports: [SolicitudPagoService],
 })
 export class SolicitudPagoModule {}

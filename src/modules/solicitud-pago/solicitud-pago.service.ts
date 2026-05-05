@@ -21,6 +21,8 @@ import { PagoCalculatorService } from '../../common/services/pago-calculator.ser
 import { EmailService } from '../../integrations/email/email.service';
 import { Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { HashChainService } from './hash-chain.service';
+import { TsaClient } from './tsa.client';
 
 interface AuthUser { userId: string; email?: string; role?: string }
 
@@ -47,6 +49,8 @@ export class SolicitudPagoService {
     private pagoCalculator: PagoCalculatorService,
     private emailService: EmailService,
     private config: ConfigService,
+    private hashChain: HashChainService,
+    private tsa: TsaClient,
   ) {}
 
   async create(dto: CreateSolicitudPagoDto, user: AuthUser): Promise<SolicitudPagoDocument> {
@@ -89,6 +93,13 @@ export class SolicitudPagoService {
     }
 
     const ahora = new Date();
+    const userId = new Types.ObjectId(user.userId);
+    const firstEntry = await this.buildHistorialEntry('', {
+      accion: 'crear',
+      usuario: userId,
+      estadoNuevo: 'pendiente',
+      fecha: ahora,
+    });
     const solicitud = await this.solicitudModel.create({
       factura: dto.factura ? new Types.ObjectId(dto.factura) : undefined,
       ordenPago: dto.ordenPago ? new Types.ObjectId(dto.ordenPago) : undefined,
@@ -100,13 +111,8 @@ export class SolicitudPagoService {
       medioPago: dto.medioPago,
       bancoOrigen: dto.bancoOrigen,
       estado: 'pendiente',
-      createdBy: { user: new Types.ObjectId(user.userId), fecha: ahora },
-      historial: [{
-        accion: 'crear',
-        usuario: new Types.ObjectId(user.userId),
-        estadoNuevo: 'pendiente',
-        fecha: ahora,
-      }],
+      createdBy: { user: userId, fecha: ahora },
+      historial: [firstEntry],
     });
 
     this.notificarContabilidad(solicitud, displayRef).catch(err =>
@@ -262,13 +268,13 @@ export class SolicitudPagoService {
     sol.procesadoPor = { user: userId, fecha: ahora } as any;
     sol.comprobantes.push(...(subidos as any));
     sol.pagoGenerado = pago._id as any;
-    sol.historial.push({
+    await this.pushHistorial(sol, {
       accion: 'procesar',
       usuario: userId,
       estadoAnterior,
       estadoNuevo: 'procesado',
       fecha: ahora,
-    } as any);
+    });
     await sol.save();
     return sol;
   }
@@ -298,14 +304,14 @@ export class SolicitudPagoService {
     const userId = new Types.ObjectId(user.userId);
     sol.fechaVencimiento = nueva;
     sol.reagendadoVeces += 1;
-    sol.historial.push({
+    await this.pushHistorial(sol, {
       accion: 'reagendar',
       usuario: userId,
       motivo: dto.motivo,
       fechaAnterior,
       fechaNueva: nueva,
       fecha: ahora,
-    } as any);
+    });
     await sol.save();
     return sol;
   }
@@ -329,14 +335,14 @@ export class SolicitudPagoService {
     const estadoAnterior = sol.estado;
     sol.estado = estadoNuevo;
     mutate(sol);
-    sol.historial.push({
+    await this.pushHistorial(sol, {
       accion,
       usuario: new Types.ObjectId(user.userId),
       motivo,
       estadoAnterior,
       estadoNuevo,
       fecha: new Date(),
-    } as any);
+    });
     await sol.save();
     return sol;
   }
@@ -396,6 +402,44 @@ export class SolicitudPagoService {
       await factura.save();
       restante -= aplicar;
     }
+  }
+
+  /**
+   * Construye una entry de historial completa (con hash encadenado y sello TSA).
+   * Usable tanto para el primer entry (al crear) como para entries de transición.
+   */
+  private async buildHistorialEntry(
+    prevHash: string,
+    entry: { accion: string; usuario: Types.ObjectId; motivo?: string; estadoAnterior?: string; estadoNuevo?: string; fechaAnterior?: Date; fechaNueva?: Date; fecha: Date },
+  ): Promise<any> {
+    const hash = this.hashChain.computeHash(prevHash, entry as any);
+    const tsa = await this.tsa.timestamp(hash);
+    return {
+      ...entry,
+      hash,
+      tsaToken: tsa.token ?? undefined,
+      tsaError: tsa.error,
+    };
+  }
+
+  private async pushHistorial(
+    sol: SolicitudPagoDocument,
+    entry: { accion: string; usuario: Types.ObjectId; motivo?: string; estadoAnterior?: string; estadoNuevo?: string; fechaAnterior?: Date; fechaNueva?: Date; fecha: Date },
+  ): Promise<void> {
+    const prev = sol.historial.length > 0 ? sol.historial[sol.historial.length - 1].hash : '';
+    const completeEntry = await this.buildHistorialEntry(prev, entry);
+    sol.historial.push(completeEntry);
+  }
+
+  /**
+   * Verifica integridad de la cadena de historial.
+   */
+  async verificarIntegridad(id: string): Promise<{ valid: boolean; brokenAt: number | null; total: number; conTsa: number }> {
+    const sol = await this.solicitudModel.findById(id).lean();
+    if (!sol) throw new NotFoundException('Solicitud no encontrada');
+    const result = this.hashChain.verifyChain(sol.historial as any);
+    const conTsa = sol.historial.filter((e: any) => !!e.tsaToken).length;
+    return { ...result, total: sol.historial.length, conTsa };
   }
 
   private async notificarContabilidad(

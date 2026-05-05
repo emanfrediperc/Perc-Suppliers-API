@@ -38,6 +38,12 @@ export class SolicitudPagoController {
     return this.service.findOne(id);
   }
 
+  @Get(':id/verificar-integridad')
+  @Roles('admin', 'tesoreria', 'contabilidad', 'operador', 'consulta')
+  verificarIntegridad(@Param('id') id: string) {
+    return this.service.verificarIntegridad(id);
+  }
+
   @Patch(':id/aprobar')
   @Roles('admin', 'contabilidad')
   aprobar(@Param('id') id: string, @Body() dto: AprobarDto, @CurrentUser() user: any) {
