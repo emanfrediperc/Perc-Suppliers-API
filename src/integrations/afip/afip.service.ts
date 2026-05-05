@@ -1,4 +1,6 @@
 import { Injectable, Logger, BadRequestException } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
+import { PadronA5Client } from './padron-a5.client';
 
 export interface AfipContribuyente {
   razonSocial: string;
@@ -6,62 +8,61 @@ export interface AfipContribuyente {
   domicilio: string;
   tipoPersona: string;
   activo: boolean;
+  estadoClave?: string;
+  monotributo?: { categoria: string; descripcion: string } | null;
+  fechaInscripcion?: string | null;
+  actividadPrincipal?: { codigo: string; descripcion: string } | null;
 }
 
 @Injectable()
 export class AfipService {
   private readonly logger = new Logger(AfipService.name);
 
+  constructor(
+    private readonly padron: PadronA5Client,
+    private readonly config: ConfigService,
+  ) {}
+
   async consultarCuit(cuit: string): Promise<AfipContribuyente | null> {
-    const cleaned = cuit.replace(/-/g, '');
+    const cleaned = cuit.replace(/-/g, '').trim();
     if (!/^\d{11}$/.test(cleaned)) {
       throw new BadRequestException('CUIT inválido — debe ser 11 dígitos');
     }
-    try {
-      const res = await fetch(
-        `https://afip.tangofactura.com/Rest/GetContribuyenteFull?cuit=${cleaned}`,
-      );
-      if (!res.ok) return null;
-      const data = await res.json();
-      if (!data || data.errorGetData) return null;
 
+    if (!this.isConfigured()) {
+      this.logger.warn('AFIP padrón no configurado (falta cert/key/cuitRepresentado) — devolviendo null');
+      return null;
+    }
+
+    try {
+      const persona = await this.padron.getPersona(cleaned);
+      if (!persona) return null;
+
+      const principal = persona.actividades.sort((a, b) => a.orden - b.orden)[0] ?? null;
       return {
-        razonSocial: data.Contribuyente?.nombre || data.denominacion || null,
-        condicionIva: this.mapCondicionIva(data),
-        domicilio: this.buildDomicilio(data),
-        tipoPersona:
-          data.Contribuyente?.tipoClave === 'CUIT'
-            ? data.Contribuyente?.tipoPersona || '-'
-            : '-',
-        activo: data.Contribuyente?.estadoClave === 'ACTIVO',
+        razonSocial: persona.razonSocial,
+        condicionIva: persona.condicionIva,
+        domicilio: persona.domicilio,
+        tipoPersona: persona.tipoPersona,
+        activo: persona.estadoClave === 'ACTIVO',
+        estadoClave: persona.estadoClave,
+        monotributo: persona.monotributo,
+        fechaInscripcion: persona.fechaInscripcion,
+        actividadPrincipal: principal
+          ? { codigo: principal.codigo, descripcion: principal.descripcion }
+          : null,
       };
-    } catch (error) {
+    } catch (error: any) {
       this.logger.warn(`Error consultando CUIT ${cleaned}: ${error.message}`);
       return null;
     }
   }
 
-  private mapCondicionIva(data: any): string {
-    const impuestos = data.Contribuyente?.impuestos || [];
-
-    // Check for IVA Responsable Inscripto (impuesto 30 or 32 in some cases, 20/21 for IVA)
-    if (impuestos.includes(20) || impuestos.includes(21))
-      return 'IVA Responsable Inscripto';
-
-    // Check for Monotributo
-    if (data.Contribuyente?.categoriasMonotributo?.length > 0)
-      return 'Responsable Monotributo';
-
-    // Check for IVA Exento
-    if (impuestos.includes(32)) return 'IVA Sujeto Exento';
-
-    return '-';
-  }
-
-  private buildDomicilio(data: any): string {
-    const dom = data.Contribuyente?.domicilioFiscal;
-    if (!dom) return '';
-    const parts = [dom.direccion, dom.localidad, dom.descripcionProvincia].filter(Boolean);
-    return parts.join(', ');
+  isConfigured(): boolean {
+    return (
+      !!this.config.get('AFIP_CERT_PATH') &&
+      !!this.config.get('AFIP_KEY_PATH') &&
+      !!this.config.get('AFIP_CUIT_REPRESENTADO')
+    );
   }
 }

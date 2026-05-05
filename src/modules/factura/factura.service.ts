@@ -16,6 +16,8 @@ import { GeminiService } from '../../integrations/gemini/gemini.service';
 import { EmpresaProveedora, EmpresaProveedoraDocument } from '../empresa-proveedora/schemas/empresa-proveedora.schema';
 import { EmpresaCliente, EmpresaClienteDocument } from '../empresa-cliente/schemas/empresa-cliente.schema';
 import { PagoCalculatorService } from '../../common/services/pago-calculator.service';
+import { AfipService } from '../../integrations/afip/afip.service';
+import { ApocrifosService } from '../../integrations/apocrifos/apocrifos.service';
 
 @Injectable()
 export class FacturaService {
@@ -32,16 +34,21 @@ export class FacturaService {
     private geminiService: GeminiService,
     @InjectConnection() private connection: Connection,
     private pagoCalculator: PagoCalculatorService,
+    private afipService: AfipService,
+    private apocrifosService: ApocrifosService,
   ) {}
 
   async create(dto: CreateFacturaDto) {
     const isNotaCredito = dto.tipo.startsWith('NC-');
     const saldoPendiente = isNotaCredito ? 0 : dto.montoTotal;
+    await this.bloquearSiApocrifo(dto.empresaProveedora);
+    const alertas = await this.validarProveedorAfip(dto.empresaProveedora);
     const factura = await this.facturaModel.create({
       ...dto,
       saldoPendiente,
       montoPagado: isNotaCredito ? dto.montoTotal : 0,
       estado: isNotaCredito ? 'pagada' : 'pendiente',
+      alertas,
     });
 
     // If it's a credit note linked to an original invoice, reduce its saldo
@@ -212,8 +219,8 @@ export class FacturaService {
       if (!numero) continue; // Skip empty rows
 
       try {
-        if (!tipo || !fecha || !cuitProveedor || isNaN(montoTotal)) {
-          errors.push({ row: rowNum, error: 'Campos requeridos faltantes (numero, tipo, fecha, CUIT proveedor, montoTotal)' });
+        if (!tipo || !fecha || !cuitProveedor || !cuitCliente || isNaN(montoTotal)) {
+          errors.push({ row: rowNum, error: 'Campos requeridos faltantes (numero, tipo, fecha, CUIT proveedor, CUIT empresa del grupo, montoTotal)' });
           continue;
         }
 
@@ -223,9 +230,9 @@ export class FacturaService {
           continue;
         }
 
-        let cliente = cuitCliente ? await this.empresaCliModel.findOne({ cuit: cuitCliente }) : null;
-        if (cuitCliente && !cliente) {
-          errors.push({ row: rowNum, error: `Cliente con CUIT ${cuitCliente} no encontrado` });
+        const cliente = await this.empresaCliModel.findOne({ cuit: cuitCliente });
+        if (!cliente) {
+          errors.push({ row: rowNum, error: `Empresa del grupo con CUIT ${cuitCliente} no encontrada` });
           continue;
         }
 
@@ -236,19 +243,32 @@ export class FacturaService {
           continue;
         }
 
+        // Bloqueo apócrifo (mismo check que en create())
+        const apoc = await this.apocrifosService.consultar(proveedor.cuit);
+        if (apoc?.esApocrifo) {
+          errors.push({
+            row: rowNum,
+            error: `CUIT ${proveedor.cuit} figura como apócrifo en AFIP — factura no importada`,
+          });
+          continue;
+        }
+
+        const alertasAfip = await this.validarProveedorAfip(String(proveedor._id));
+
         const isNC = tipo.startsWith('NC-');
         await this.facturaModel.create({
           numero, tipo,
           fecha: new Date(fecha),
           fechaVencimiento: fechaVencimiento ? new Date(fechaVencimiento) : undefined,
           empresaProveedora: proveedor._id,
-          empresaCliente: cliente?._id,
+          empresaCliente: cliente._id,
           montoNeto: isNaN(montoNeto) ? montoTotal : montoNeto,
           montoIva,
           montoTotal,
           saldoPendiente: isNC ? 0 : montoTotal,
           montoPagado: isNC ? montoTotal : 0,
           estado: isNC ? 'pagada' : 'pendiente',
+          alertas: alertasAfip,
         });
         imported++;
       } catch (err: any) {
@@ -275,5 +295,50 @@ export class FacturaService {
       }
     }
     return { isDuplicate: false };
+  }
+
+  private async bloquearSiApocrifo(empresaProveedoraId: string): Promise<void> {
+    const proveedor = await this.empresaProvModel.findById(empresaProveedoraId).lean();
+    if (!proveedor?.cuit) return;
+    const result = await this.apocrifosService.consultar(proveedor.cuit);
+    if (result?.esApocrifo) {
+      const detalle = result.matches[0];
+      throw new BadRequestException(
+        `El CUIT ${proveedor.cuit} figura en la base de facturas apócrifas de AFIP` +
+          (detalle?.descripcion ? ` (${detalle.descripcion})` : ''),
+      );
+    }
+  }
+
+  private async validarProveedorAfip(empresaProveedoraId: string): Promise<any[]> {
+    if (!this.afipService.isConfigured()) return [];
+    try {
+      const proveedor = await this.empresaProvModel.findById(empresaProveedoraId).lean();
+      if (!proveedor?.cuit) return [];
+
+      const persona = await this.afipService.consultarCuit(proveedor.cuit);
+      if (!persona) {
+        return [{
+          tipo: 'afip_no_encontrado',
+          severidad: 'warning',
+          mensaje: `CUIT ${proveedor.cuit} no encontrado en padrón AFIP`,
+          fecha: new Date(),
+        }];
+      }
+      const alertas: any[] = [];
+      if (!persona.activo) {
+        alertas.push({
+          tipo: 'afip_inactivo',
+          severidad: 'error',
+          mensaje: `Proveedor con estado AFIP "${persona.estadoClave}"`,
+          detalle: { estadoClave: persona.estadoClave },
+          fecha: new Date(),
+        });
+      }
+      return alertas;
+    } catch (err: any) {
+      this.logger.warn(`validarProveedorAfip falló: ${err.message}`);
+      return [];
+    }
   }
 }

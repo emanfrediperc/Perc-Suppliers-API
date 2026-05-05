@@ -35,7 +35,7 @@ export class Factura {
   @Prop({ type: Types.ObjectId, ref: 'EmpresaProveedora' })
   empresaProveedora: Types.ObjectId;
 
-  @Prop({ type: Types.ObjectId, ref: 'EmpresaCliente' })
+  @Prop({ type: Types.ObjectId, ref: 'EmpresaCliente', required: true })
   empresaCliente: Types.ObjectId;
 
   @Prop({ type: Types.ObjectId, ref: 'OrdenPago' })
@@ -67,6 +67,18 @@ export class Factura {
 
   @Prop({ default: true })
   activo: boolean;
+
+  @Prop({
+    type: [{
+      tipo: { type: String, required: true },
+      severidad: { type: String, enum: ['info', 'warning', 'error'], default: 'warning' },
+      mensaje: { type: String, required: true },
+      detalle: { type: Object },
+      fecha: { type: Date, default: Date.now },
+    }],
+    default: [],
+  })
+  alertas: { tipo: string; severidad: 'info' | 'warning' | 'error'; mensaje: string; detalle?: any; fecha: Date }[];
 }
 
 export const FacturaSchema = SchemaFactory.createForClass(Factura);

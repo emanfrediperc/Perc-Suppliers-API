@@ -12,7 +12,7 @@ export class CreateFacturaDto {
   @ApiProperty({ example: 121000 }) @IsNumber() montoTotal: number;
   @ApiPropertyOptional({ example: 'ARS' }) @IsOptional() @IsString() moneda?: string;
   @ApiProperty() @IsMongoId() @IsNotEmpty() empresaProveedora: string;
-  @ApiPropertyOptional() @IsOptional() @IsMongoId() empresaCliente?: string;
+  @ApiProperty() @IsMongoId() @IsNotEmpty() empresaCliente: string;
   @ApiPropertyOptional() @IsOptional() @IsMongoId() ordenPago?: string;
   @ApiPropertyOptional() @IsOptional() @IsString() archivoUrl?: string;
   @ApiPropertyOptional() @IsOptional() @IsString() archivoKey?: string;

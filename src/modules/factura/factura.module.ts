@@ -12,9 +12,11 @@ import { FacturaService } from './factura.service';
 import { FacturaCronService } from './factura-cron.service';
 import { ExportService } from '../../common/services/export.service';
 import { PagoCalculatorService } from '../../common/services/pago-calculator.service';
+import { AfipModule } from '../../integrations/afip/afip.module';
+import { ApocrifosModule } from '../../integrations/apocrifos/apocrifos.module';
 
 @Module({
-  imports: [MongooseModule.forFeature([
+  imports: [AfipModule, ApocrifosModule, MongooseModule.forFeature([
     { name: Factura.name, schema: FacturaSchema }, { name: Pago.name, schema: PagoSchema },
     { name: OrdenPago.name, schema: OrdenPagoSchema }, { name: Convenio.name, schema: ConvenioSchema },
     { name: EmpresaProveedora.name, schema: EmpresaProveedoraSchema },
