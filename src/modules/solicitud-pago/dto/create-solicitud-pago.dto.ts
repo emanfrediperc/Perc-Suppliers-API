@@ -1,7 +1,7 @@
 import { IsEnum, IsMongoId, IsNotEmpty, IsNumber, IsOptional, IsPositive, IsString, IsDateString, ValidateIf } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { TIPOS_SOLICITUD } from '../schemas/solicitud-pago.schema';
-import type { TipoSolicitud } from '../schemas/solicitud-pago.schema';
+import { TIPOS_SOLICITUD, MEDIOS_PAGO } from '../schemas/solicitud-pago.schema';
+import type { TipoSolicitud, MedioPago } from '../schemas/solicitud-pago.schema';
 
 export class CreateSolicitudPagoDto {
   @ApiProperty() @IsMongoId() @IsNotEmpty() factura: string;
@@ -17,4 +17,8 @@ export class CreateSolicitudPagoDto {
   fechaVencimiento?: string;
 
   @ApiPropertyOptional() @IsOptional() @IsString() nota?: string;
+
+  @ApiProperty({ enum: MEDIOS_PAGO }) @IsEnum(MEDIOS_PAGO) medioPago: MedioPago;
+
+  @ApiPropertyOptional() @IsOptional() @IsString() bancoOrigen?: string;
 }

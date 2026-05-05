@@ -8,10 +8,14 @@ import {
   TipoComprobante,
 } from './schemas/solicitud-pago.schema';
 import { Factura, FacturaDocument } from '../factura/schemas/factura.schema';
+import { Pago, PagoDocument } from '../pago/schemas/pago.schema';
+import { Convenio, ConvenioDocument } from '../convenio/schemas/convenio.schema';
 import { CreateSolicitudPagoDto } from './dto/create-solicitud-pago.dto';
 import { CancelarDto, ReagendarDto } from './dto/transition.dto';
+import { ProcesarSolicitudPagoDto } from './dto/procesar.dto';
 import { SolicitudPagoQueryDto } from './dto/query.dto';
 import { StorageService } from '../../integrations/storage/storage.service';
+import { PagoCalculatorService } from '../../common/services/pago-calculator.service';
 
 interface AuthUser { userId: string; email?: string; role?: string }
 
@@ -28,7 +32,10 @@ export class SolicitudPagoService {
   constructor(
     @InjectModel(SolicitudPago.name) private solicitudModel: Model<SolicitudPagoDocument>,
     @InjectModel(Factura.name) private facturaModel: Model<FacturaDocument>,
+    @InjectModel(Pago.name) private pagoModel: Model<PagoDocument>,
+    @InjectModel(Convenio.name) private convenioModel: Model<ConvenioDocument>,
     private storageService: StorageService,
+    private pagoCalculator: PagoCalculatorService,
   ) {}
 
   async create(dto: CreateSolicitudPagoDto, user: AuthUser): Promise<SolicitudPagoDocument> {
@@ -56,6 +63,8 @@ export class SolicitudPagoService {
       monto: dto.monto,
       fechaVencimiento: dto.fechaVencimiento ? new Date(dto.fechaVencimiento) : undefined,
       nota: dto.nota,
+      medioPago: dto.medioPago,
+      bancoOrigen: dto.bancoOrigen,
       estado: 'pendiente',
       createdBy: { user: new Types.ObjectId(user.userId), fecha: ahora },
       historial: [{
@@ -122,6 +131,7 @@ export class SolicitudPagoService {
 
   async procesar(
     id: string,
+    dto: ProcesarSolicitudPagoDto,
     files: { perc?: Express.Multer.File; retenciones?: Express.Multer.File },
     user: AuthUser,
   ): Promise<SolicitudPagoDocument> {
@@ -136,6 +146,8 @@ export class SolicitudPagoService {
 
     const ahora = new Date();
     const userId = new Types.ObjectId(user.userId);
+
+    // Subir comprobantes en paralelo
     const subidos = await Promise.all(
       (['perc', 'retenciones'] as TipoComprobante[]).map(async tipo => {
         const file = files[tipo]!;
@@ -151,10 +163,70 @@ export class SolicitudPagoService {
       }),
     );
 
+    // Calcular comision/descuento via convenio + retenciones
+    const convenio = await this.convenioModel
+      .findOne({ empresaProveedora: sol.empresaProveedora, activo: true })
+      .lean();
+    const calc = this.pagoCalculator.calculate(
+      sol.monto,
+      {
+        retencionIIBB: dto.retencionIIBB || 0,
+        retencionGanancias: dto.retencionGanancias || 0,
+        retencionIVA: dto.retencionIVA || 0,
+        retencionSUSS: dto.retencionSUSS || 0,
+        otrasRetenciones: dto.otrasRetenciones || 0,
+      },
+      convenio
+        ? {
+            comisionPorcentaje: convenio.comisionPorcentaje,
+            descuentoPorcentaje: convenio.descuentoPorcentaje,
+            reglas: convenio.reglas,
+          }
+        : null,
+    );
+
+    // Crear el Pago real
+    const pago = await this.pagoModel.create({
+      factura: sol.factura,
+      fechaPago: ahora,
+      montoBase: sol.monto,
+      retencionIIBB: dto.retencionIIBB || 0,
+      retencionGanancias: dto.retencionGanancias || 0,
+      retencionIVA: dto.retencionIVA || 0,
+      retencionSUSS: dto.retencionSUSS || 0,
+      otrasRetenciones: dto.otrasRetenciones || 0,
+      comision: calc.comision,
+      porcentajeComision: calc.porcentajeComision,
+      descuento: calc.descuento,
+      porcentajeDescuento: calc.porcentajeDescuento,
+      montoNeto: calc.montoNeto,
+      medioPago: sol.medioPago,
+      referenciaPago: dto.referenciaPago,
+      observaciones: dto.observaciones,
+      convenioAplicado: convenio?._id,
+      estado: 'confirmado',
+    });
+
+    // Recalcular saldo de factura
+    const factura = await this.facturaModel.findById(sol.factura);
+    if (factura) {
+      const pagosActivos = await this.pagoModel
+        .find({ factura: factura._id, estado: { $nin: ['anulado', 'rechazado'] } })
+        .lean();
+      const montoPagado = pagosActivos.reduce((sum, p) => sum + p.montoBase, 0);
+      factura.montoPagado = montoPagado;
+      factura.saldoPendiente = Math.max(0, factura.montoTotal - montoPagado);
+      if (factura.saldoPendiente <= 0) factura.estado = 'pagada';
+      else if (montoPagado > 0) factura.estado = 'parcial';
+      await factura.save();
+    }
+
+    // Cerrar la solicitud
     const estadoAnterior = sol.estado;
     sol.estado = 'procesado';
     sol.procesadoPor = { user: userId, fecha: ahora } as any;
     sol.comprobantes.push(...(subidos as any));
+    sol.pagoGenerado = pago._id as any;
     sol.historial.push({
       accion: 'procesar',
       usuario: userId,

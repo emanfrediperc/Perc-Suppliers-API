@@ -18,6 +18,9 @@ export type TipoSolicitud = (typeof TIPOS_SOLICITUD)[number];
 export const TIPOS_COMPROBANTE = ['perc', 'retenciones'] as const;
 export type TipoComprobante = (typeof TIPOS_COMPROBANTE)[number];
 
+export const MEDIOS_PAGO = ['transferencia', 'cheque', 'efectivo', 'compensacion', 'otro'] as const;
+export type MedioPago = (typeof MEDIOS_PAGO)[number];
+
 @Schema({ _id: false })
 class AuditUser {
   @Prop({ type: Types.ObjectId, ref: 'User', required: true }) user: Types.ObjectId;
@@ -69,6 +72,12 @@ export class SolicitudPago {
 
   @Prop()
   nota?: string;
+
+  @Prop({ required: true, enum: MEDIOS_PAGO })
+  medioPago: MedioPago;
+
+  @Prop()
+  bancoOrigen?: string;
 
   @Prop({ required: true, enum: ESTADOS_SOLICITUD, default: 'pendiente', index: true })
   estado: EstadoSolicitud;

@@ -10,6 +10,7 @@ import { CurrentUser } from '../../auth/decorators/current-user.decorator';
 import { SolicitudPagoService } from './solicitud-pago.service';
 import { CreateSolicitudPagoDto } from './dto/create-solicitud-pago.dto';
 import { AprobarDto, EjecutarDto, CancelarDto, ReagendarDto } from './dto/transition.dto';
+import { ProcesarSolicitudPagoDto } from './dto/procesar.dto';
 import { SolicitudPagoQueryDto } from './dto/query.dto';
 
 @ApiTags('Solicitudes de Pago')
@@ -58,11 +59,13 @@ export class SolicitudPagoController {
   ]))
   procesar(
     @Param('id') id: string,
+    @Body() dto: ProcesarSolicitudPagoDto,
     @UploadedFiles() files: { perc?: Express.Multer.File[]; retenciones?: Express.Multer.File[] },
     @CurrentUser() user: any,
   ) {
     return this.service.procesar(
       id,
+      dto,
       { perc: files.perc?.[0], retenciones: files.retenciones?.[0] },
       user,
     );
