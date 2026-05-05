@@ -10,12 +10,16 @@ import {
 import { Factura, FacturaDocument } from '../factura/schemas/factura.schema';
 import { Pago, PagoDocument } from '../pago/schemas/pago.schema';
 import { Convenio, ConvenioDocument } from '../convenio/schemas/convenio.schema';
+import { User, UserDocument } from '../../auth/schemas/user.schema';
 import { CreateSolicitudPagoDto } from './dto/create-solicitud-pago.dto';
 import { CancelarDto, ReagendarDto } from './dto/transition.dto';
 import { ProcesarSolicitudPagoDto } from './dto/procesar.dto';
 import { SolicitudPagoQueryDto } from './dto/query.dto';
 import { StorageService } from '../../integrations/storage/storage.service';
 import { PagoCalculatorService } from '../../common/services/pago-calculator.service';
+import { EmailService } from '../../integrations/email/email.service';
+import { Logger } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 
 interface AuthUser { userId: string; email?: string; role?: string }
 
@@ -29,13 +33,18 @@ const TRANSITIONS: Record<string, EstadoSolicitud[]> = {
 
 @Injectable()
 export class SolicitudPagoService {
+  private readonly logger = new Logger(SolicitudPagoService.name);
+
   constructor(
     @InjectModel(SolicitudPago.name) private solicitudModel: Model<SolicitudPagoDocument>,
     @InjectModel(Factura.name) private facturaModel: Model<FacturaDocument>,
     @InjectModel(Pago.name) private pagoModel: Model<PagoDocument>,
     @InjectModel(Convenio.name) private convenioModel: Model<ConvenioDocument>,
+    @InjectModel(User.name) private userModel: Model<UserDocument>,
     private storageService: StorageService,
     private pagoCalculator: PagoCalculatorService,
+    private emailService: EmailService,
+    private config: ConfigService,
   ) {}
 
   async create(dto: CreateSolicitudPagoDto, user: AuthUser): Promise<SolicitudPagoDocument> {
@@ -74,6 +83,11 @@ export class SolicitudPagoService {
         fecha: ahora,
       }],
     });
+
+    this.notificarContabilidad(solicitud, factura).catch(err =>
+      this.logger.warn(`No se pudo notificar a contabilidad: ${err.message}`),
+    );
+
     return solicitud;
   }
 
@@ -315,5 +329,44 @@ export class SolicitudPagoService {
         'Compromiso solo modificable en o después de la fecha de vencimiento',
       );
     }
+  }
+
+  private async notificarContabilidad(
+    sol: SolicitudPagoDocument,
+    factura: FacturaDocument,
+  ): Promise<void> {
+    const recipients = await this.userModel
+      .find({ role: 'contabilidad', activo: true })
+      .select('email')
+      .lean();
+    if (recipients.length === 0) {
+      this.logger.warn('No hay usuarios con rol contabilidad activos para notificar');
+      return;
+    }
+    const baseUrl = this.config.get<string>('CORS_ORIGIN') || 'http://localhost:4200';
+    const link = `${baseUrl}/solicitudes-pago/${sol._id}`;
+    const tipoLabel = sol.tipo === 'compromiso' ? 'Compromiso de Pago' : 'Solicitud de Pago';
+    const fechaVenc = sol.fechaVencimiento
+      ? sol.fechaVencimiento.toLocaleDateString('es-AR')
+      : '—';
+    const monto = new Intl.NumberFormat('es-AR', { style: 'currency', currency: 'ARS' }).format(
+      sol.monto,
+    );
+    const subject = `[Perc] Nueva ${tipoLabel} pendiente de aprobación`;
+    const html = `
+      <h2>Nueva ${tipoLabel} pendiente</h2>
+      <p>Se generó una solicitud que requiere tu aprobación.</p>
+      <table cellpadding="6" style="border-collapse:collapse;font-family:sans-serif;font-size:14px">
+        <tr><td><strong>Factura:</strong></td><td>${factura.numero}</td></tr>
+        <tr><td><strong>Tipo:</strong></td><td>${tipoLabel}</td></tr>
+        <tr><td><strong>Monto:</strong></td><td>${monto}</td></tr>
+        ${sol.tipo === 'compromiso' ? `<tr><td><strong>Fecha vencimiento:</strong></td><td>${fechaVenc}</td></tr>` : ''}
+        <tr><td><strong>Medio de pago:</strong></td><td>${sol.medioPago}</td></tr>
+        ${sol.bancoOrigen ? `<tr><td><strong>Banco origen:</strong></td><td>${sol.bancoOrigen}</td></tr>` : ''}
+        ${sol.nota ? `<tr><td><strong>Nota:</strong></td><td>${sol.nota}</td></tr>` : ''}
+      </table>
+      <p style="margin-top:16px"><a href="${link}" style="background:#6366f1;color:#fff;padding:10px 18px;text-decoration:none;border-radius:6px">Revisar y aprobar</a></p>
+    `;
+    await Promise.all(recipients.map(r => this.emailService.sendEmail(r.email, subject, html)));
   }
 }
