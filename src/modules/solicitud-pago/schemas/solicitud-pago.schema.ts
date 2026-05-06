@@ -31,7 +31,7 @@ const AuditUserSchema = SchemaFactory.createForClass(AuditUser);
 
 @Schema({ _id: false })
 class Comprobante {
-  @Prop({ required: true, enum: TIPOS_COMPROBANTE }) tipo: TipoComprobante;
+  @Prop({ type: String, required: true, enum: TIPOS_COMPROBANTE }) tipo: TipoComprobante;
   @Prop({ required: true }) url: string;
   @Prop({ required: true }) key: string;
   @Prop({ required: true }) nombre: string;
@@ -70,7 +70,7 @@ export class SolicitudPago {
   @Prop({ type: Types.ObjectId, ref: 'EmpresaProveedora', required: true, index: true })
   empresaProveedora: Types.ObjectId;
 
-  @Prop({ required: true, enum: TIPOS_SOLICITUD })
+  @Prop({ type: String, required: true, enum: TIPOS_SOLICITUD })
   tipo: TipoSolicitud;
 
   @Prop({ required: true })
@@ -82,13 +82,13 @@ export class SolicitudPago {
   @Prop()
   nota?: string;
 
-  @Prop({ required: true, enum: MEDIOS_PAGO })
+  @Prop({ type: String, required: true, enum: MEDIOS_PAGO })
   medioPago: MedioPago;
 
   @Prop()
   bancoOrigen?: string;
 
-  @Prop({ required: true, enum: ESTADOS_SOLICITUD, default: 'pendiente', index: true })
+  @Prop({ type: String, required: true, enum: ESTADOS_SOLICITUD, default: 'pendiente', index: true })
   estado: EstadoSolicitud;
 
   @Prop({ type: AuditUserSchema, required: true })

@@ -92,7 +92,7 @@ export class SolicitudPagoService {
     const activasFilter: any = { estado: { $in: ['pendiente', 'en_proceso', 'pago_en_proceso_perc'] } };
     if (dto.factura) activasFilter.factura = new Types.ObjectId(dto.factura);
     else activasFilter.ordenPago = new Types.ObjectId(dto.ordenPago!);
-    const activas = await this.solicitudModel.find(activasFilter).select('monto').lean();
+    const activas = await this.solicitudModel.find(activasFilter, { monto: 1 }).lean();
     const yaComprometido = activas.reduce((sum, s) => sum + (s.monto || 0), 0);
     const disponibleReal = saldoDisponible - yaComprometido;
 
