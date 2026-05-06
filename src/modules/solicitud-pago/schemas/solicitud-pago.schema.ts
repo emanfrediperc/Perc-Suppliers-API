@@ -106,6 +106,12 @@ export class SolicitudPago {
   @Prop({ type: AuditUserSchema })
   canceladoPor?: AuditUser;
 
+  @Prop({ default: false })
+  revertido: boolean;
+
+  @Prop({ type: AuditUserSchema })
+  revertidoPor?: AuditUser;
+
   @Prop({ type: [ComprobanteSchema], default: [] })
   comprobantes: Comprobante[];
 

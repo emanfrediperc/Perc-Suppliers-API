@@ -1,6 +1,7 @@
 import {
-  Body, Controller, Get, Param, Patch, Post, Query, UploadedFiles, UseGuards, UseInterceptors,
+  Body, Controller, Get, Param, Patch, Post, Query, Res, UploadedFiles, UseGuards, UseInterceptors,
 } from '@nestjs/common';
+import * as express from 'express';
 import { FileFieldsInterceptor } from '@nestjs/platform-express';
 import { ApiBearerAuth, ApiTags, ApiConsumes } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
@@ -9,7 +10,7 @@ import { Roles } from '../../auth/decorators/roles.decorator';
 import { CurrentUser } from '../../auth/decorators/current-user.decorator';
 import { SolicitudPagoService } from './solicitud-pago.service';
 import { CreateSolicitudPagoDto } from './dto/create-solicitud-pago.dto';
-import { AprobarDto, EjecutarDto, CancelarDto, ReagendarDto } from './dto/transition.dto';
+import { AprobarDto, EjecutarDto, CancelarDto, ReagendarDto, RevertirDto } from './dto/transition.dto';
 import { ProcesarSolicitudPagoDto } from './dto/procesar.dto';
 import { SolicitudPagoQueryDto } from './dto/query.dto';
 
@@ -36,6 +37,16 @@ export class SolicitudPagoController {
   @Roles('admin', 'tesoreria', 'contabilidad', 'operador', 'consulta')
   pendingCount(@CurrentUser() user: { role: string }) {
     return this.service.pendingCountForRole(user.role);
+  }
+
+  @Get('export')
+  @Roles('admin', 'tesoreria', 'contabilidad', 'operador', 'consulta')
+  async exportar(@Query() query: SolicitudPagoQueryDto, @Res() res: express.Response) {
+    const buffer = await this.service.exportToExcel(query);
+    const filename = `solicitudes-pago-${new Date().toISOString().slice(0, 10)}.xlsx`;
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.send(buffer);
   }
 
   @Get(':id')
@@ -99,5 +110,11 @@ export class SolicitudPagoController {
   @Roles('admin', 'tesoreria')
   reagendar(@Param('id') id: string, @Body() dto: ReagendarDto, @CurrentUser() user: any) {
     return this.service.reagendar(id, dto, user);
+  }
+
+  @Patch(':id/revertir')
+  @Roles('admin')
+  revertir(@Param('id') id: string, @Body() dto: RevertirDto, @CurrentUser() user: any) {
+    return this.service.revertir(id, dto, user);
   }
 }

@@ -6,6 +6,7 @@ import { Pago, PagoSchema } from '../pago/schemas/pago.schema';
 import { EmpresaProveedora, EmpresaProveedoraSchema } from '../empresa-proveedora/schemas/empresa-proveedora.schema';
 import { Prestamo, PrestamoSchema } from '../prestamos/schemas/prestamo.schema';
 import { CompraMonedaExtranjera, CompraMonedaExtranjeraSchema } from '../compra-moneda-extranjera/schemas/compra-moneda-extranjera.schema';
+import { SolicitudPago, SolicitudPagoSchema } from '../solicitud-pago/schemas/solicitud-pago.schema';
 import { DashboardController } from './dashboard.controller';
 import { DashboardService } from './dashboard.service';
 
@@ -17,6 +18,7 @@ import { DashboardService } from './dashboard.service';
     { name: EmpresaProveedora.name, schema: EmpresaProveedoraSchema },
     { name: Prestamo.name, schema: PrestamoSchema },
     { name: CompraMonedaExtranjera.name, schema: CompraMonedaExtranjeraSchema },
+    { name: SolicitudPago.name, schema: SolicitudPagoSchema },
   ])],
   controllers: [DashboardController],
   providers: [DashboardService],

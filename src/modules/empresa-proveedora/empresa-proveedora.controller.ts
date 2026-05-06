@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Patch, Param, Body, Query, Res, UseGuards } from '@nestjs/common';
+import { Controller, Get, Post, Patch, Param, Body, Query, Res, Req, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import * as express from 'express';
 import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
@@ -81,4 +81,14 @@ export class EmpresaProveedoraController {
   @Patch(':id')
   @Roles('admin')
   update(@Param('id') id: string, @Body() dto: UpdateEmpresaProveedoraDto) { return this.service.update(id, dto); }
+
+  @Patch(':id/apocrifo-override')
+  @Roles('admin')
+  setApocrifoOverride(
+    @Param('id') id: string,
+    @Body() body: { activo: boolean; motivo?: string },
+    @Req() req: any,
+  ) {
+    return this.service.setApocrifoOverride(id, body.activo, body.motivo, req.user?.email || 'admin');
+  }
 }

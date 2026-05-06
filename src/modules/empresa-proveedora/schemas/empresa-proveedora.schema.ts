@@ -44,6 +44,23 @@ export class EmpresaProveedora {
     cbu: string;
     alias: string;
   };
+
+  /**
+   * Override manual del check apócrifo. Si está en true, se saltea el bloqueo
+   * automático aunque AFIP marque el CUIT como apócrifo. Útil cuando AFIP marca
+   * por error y la empresa fue verificada externamente.
+   */
+  @Prop({ default: false })
+  apocrifoOverride: boolean;
+
+  @Prop()
+  apocrifoOverrideMotivo?: string;
+
+  @Prop()
+  apocrifoOverridePor?: string;
+
+  @Prop()
+  apocrifoOverrideFecha?: Date;
 }
 
 export const EmpresaProveedoraSchema = SchemaFactory.createForClass(EmpresaProveedora);

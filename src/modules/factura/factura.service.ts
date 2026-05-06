@@ -300,6 +300,10 @@ export class FacturaService {
   private async bloquearSiApocrifo(empresaProveedoraId: string): Promise<void> {
     const proveedor = await this.empresaProvModel.findById(empresaProveedoraId).lean();
     if (!proveedor?.cuit) return;
+    if ((proveedor as any).apocrifoOverride === true) {
+      this.logger.warn(`Proveedor ${proveedor.cuit} tiene override manual de apócrifo, salteando check`);
+      return;
+    }
     const result = await this.apocrifosService.consultar(proveedor.cuit);
     if (result?.esApocrifo) {
       const detalle = result.matches[0];

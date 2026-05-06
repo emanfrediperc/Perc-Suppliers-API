@@ -11,6 +11,7 @@ import { SolicitudPagoController } from './solicitud-pago.controller';
 import { StorageModule } from '../../integrations/storage/storage.module';
 import { EmailModule } from '../../integrations/email/email.module';
 import { PagoCalculatorService } from '../../common/services/pago-calculator.service';
+import { ExportService } from '../../common/services/export.service';
 import { HashChainService } from './hash-chain.service';
 import { TsaClient } from './tsa.client';
 import { SolicitudPagoCronService } from './solicitud-pago-cron.service';
@@ -29,7 +30,7 @@ import { SolicitudPagoCronService } from './solicitud-pago-cron.service';
     ]),
   ],
   controllers: [SolicitudPagoController],
-  providers: [SolicitudPagoService, PagoCalculatorService, HashChainService, TsaClient, SolicitudPagoCronService],
+  providers: [SolicitudPagoService, PagoCalculatorService, ExportService, HashChainService, TsaClient, SolicitudPagoCronService],
   exports: [SolicitudPagoService],
 })
 export class SolicitudPagoModule {}

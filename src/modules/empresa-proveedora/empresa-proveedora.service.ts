@@ -51,4 +51,21 @@ export class EmpresaProveedoraService {
     if (!empresa) throw new NotFoundException('Empresa proveedora no encontrada');
     return empresa;
   }
+
+  async setApocrifoOverride(id: string, activo: boolean, motivo: string | undefined, adminEmail: string) {
+    const update: any = { apocrifoOverride: activo };
+    if (activo) {
+      if (!motivo) throw new NotFoundException('Motivo requerido para activar override');
+      update.apocrifoOverrideMotivo = motivo;
+      update.apocrifoOverridePor = adminEmail;
+      update.apocrifoOverrideFecha = new Date();
+    } else {
+      update.apocrifoOverrideMotivo = null;
+      update.apocrifoOverridePor = null;
+      update.apocrifoOverrideFecha = null;
+    }
+    const empresa = await this.empresaModel.findByIdAndUpdate(id, update, { new: true });
+    if (!empresa) throw new NotFoundException('Empresa proveedora no encontrada');
+    return empresa;
+  }
 }

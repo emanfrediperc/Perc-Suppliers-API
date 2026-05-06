@@ -34,6 +34,12 @@ export class AuditLogInterceptor implements NestInterceptor {
     else if (url.includes('/rechazar')) accion = 'rechazar';
     else if (url.includes('/clear')) accion = 'cancelar';
     else if (url.includes('/renew')) accion = 'renovar';
+    else if (url.includes('/ejecutar')) accion = 'ejecutar';
+    else if (url.includes('/procesar')) accion = 'procesar';
+    else if (url.includes('/cancelar')) accion = 'cancelar';
+    else if (url.includes('/reagendar')) accion = 'reagendar';
+    else if (url.includes('/revertir')) accion = 'revertir';
+    else if (url.includes('/apocrifo-override')) accion = 'apocrifo-override';
 
     return next.handle().pipe(
       tap({

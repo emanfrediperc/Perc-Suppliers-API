@@ -7,6 +7,7 @@ import { Pago, PagoDocument } from '../pago/schemas/pago.schema';
 import { EmpresaProveedora, EmpresaProveedoraDocument } from '../empresa-proveedora/schemas/empresa-proveedora.schema';
 import { Prestamo, PrestamoDocument } from '../prestamos/schemas/prestamo.schema';
 import { CompraMonedaExtranjera, CompraMonedaExtranjeraDocument } from '../compra-moneda-extranjera/schemas/compra-moneda-extranjera.schema';
+import { SolicitudPago, SolicitudPagoDocument } from '../solicitud-pago/schemas/solicitud-pago.schema';
 import { PrestamoStatus } from '../prestamos/enums/prestamo-status.enum';
 import { EstadoCompraMonedaExtranjera } from '../compra-moneda-extranjera/enums/estado-compra.enum';
 import { DashboardQueryDto } from './dto/dashboard-query.dto';
@@ -20,6 +21,7 @@ export class DashboardService {
     @InjectModel(EmpresaProveedora.name) private empresaModel: Model<EmpresaProveedoraDocument>,
     @InjectModel(Prestamo.name) private prestamoModel: Model<PrestamoDocument>,
     @InjectModel(CompraMonedaExtranjera.name) private compraFxModel: Model<CompraMonedaExtranjeraDocument>,
+    @InjectModel(SolicitudPago.name) private solicitudModel: Model<SolicitudPagoDocument>,
   ) {}
 
   /**
@@ -69,11 +71,18 @@ export class DashboardService {
       }
     }
 
-    const [totalOrdenes, ordenesPendientes, totalFacturas, facturasPendientes, totalPagos, totalProveedores] = await Promise.all([
+    const [totalOrdenes, ordenesPendientes, totalFacturas, facturasPendientes, totalPagos, totalProveedores, solicitudesPendientes, solicitudesEnProceso, comprometidosFuturos] = await Promise.all([
       this.ordenModel.countDocuments(dateMatch), this.ordenModel.countDocuments({ estado: 'pendiente', ...dateMatch }),
       this.facturaModel.countDocuments(dateMatch), this.facturaModel.countDocuments({ estado: { $in: ['pendiente', 'parcial'] }, ...dateMatch }),
       this.pagoModel.countDocuments(pagoDateMatch), this.empresaModel.countDocuments({ activa: true }),
+      this.solicitudModel.countDocuments({ estado: 'pendiente' }),
+      this.solicitudModel.countDocuments({ estado: { $in: ['en_proceso', 'pago_en_proceso_perc'] } }),
+      this.solicitudModel.aggregate([
+        { $match: { tipo: 'compromiso', estado: { $in: ['pendiente', 'en_proceso'] }, fechaVencimiento: { $gte: new Date() } } },
+        { $group: { _id: null, total: { $sum: '$monto' } } },
+      ]),
     ]);
+    const montoComprometidoFuturo = comprometidosFuturos[0]?.total || 0;
     // saldoPendiente should NOT be filtered by date - it's always the current outstanding balance
     const [montoPagadoResult, saldoPendienteResult] = await Promise.all([
       this.pagoModel.aggregate([{ $match: { estado: 'confirmado', ...pagoDateMatch } }, { $group: { _id: null, total: { $sum: '$montoBase' } } }]),
@@ -110,7 +119,7 @@ export class DashboardService {
       };
     }
 
-    return { totalOrdenes, ordenesPendientes, totalFacturas, facturasPendientes, totalPagos, totalProveedores, montoPagado, saldoPendiente, trends };
+    return { totalOrdenes, ordenesPendientes, totalFacturas, facturasPendientes, totalPagos, totalProveedores, solicitudesPendientes, solicitudesEnProceso, montoComprometidoFuturo, montoPagado, saldoPendiente, trends };
   }
 
   async getRecentActivity() {

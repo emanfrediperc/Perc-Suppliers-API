@@ -13,11 +13,12 @@ import { OrdenPago, OrdenPagoDocument } from '../orden-pago/schemas/orden-pago.s
 import { Convenio, ConvenioDocument } from '../convenio/schemas/convenio.schema';
 import { User, UserDocument } from '../../auth/schemas/user.schema';
 import { CreateSolicitudPagoDto } from './dto/create-solicitud-pago.dto';
-import { CancelarDto, ReagendarDto } from './dto/transition.dto';
+import { CancelarDto, ReagendarDto, RevertirDto } from './dto/transition.dto';
 import { ProcesarSolicitudPagoDto } from './dto/procesar.dto';
 import { SolicitudPagoQueryDto } from './dto/query.dto';
 import { StorageService } from '../../integrations/storage/storage.service';
 import { PagoCalculatorService } from '../../common/services/pago-calculator.service';
+import { ExportService } from '../../common/services/export.service';
 import { EmailService } from '../../integrations/email/email.service';
 import { Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
@@ -51,7 +52,64 @@ export class SolicitudPagoService {
     private config: ConfigService,
     private hashChain: HashChainService,
     private tsa: TsaClient,
+    private exportService: ExportService,
   ) {}
+
+  async exportToExcel(query: SolicitudPagoQueryDto): Promise<Buffer> {
+    const q: any = {};
+    if (query.estado) q.estado = query.estado;
+    if (query.tipo) q.tipo = query.tipo;
+    if (query.factura) q.factura = new Types.ObjectId(query.factura);
+    if (query.ordenPago) q.ordenPago = new Types.ObjectId(query.ordenPago);
+    if (query.empresaProveedora) q.empresaProveedora = new Types.ObjectId(query.empresaProveedora);
+
+    const data = await this.solicitudModel
+      .find(q)
+      .populate('factura', 'numero')
+      .populate('ordenPago', 'numero')
+      .populate('empresaProveedora', 'razonSocial cuit')
+      .populate('createdBy.user', 'email')
+      .populate('aprobadoPor.user', 'email')
+      .populate('procesadoPor.user', 'email')
+      .sort({ createdAt: -1 })
+      .lean();
+
+    const rows = data.map((s: any) => ({
+      tipo: s.tipo,
+      referencia: s.factura?.numero ? `Factura ${s.factura.numero}` : (s.ordenPago?.numero ? `Orden ${s.ordenPago.numero}` : '—'),
+      proveedor: s.empresaProveedora?.razonSocial,
+      cuit: s.empresaProveedora?.cuit,
+      monto: s.monto,
+      medioPago: s.medioPago,
+      estado: s.estado,
+      fechaVencimiento: s.fechaVencimiento,
+      creadoPor: s.createdBy?.user?.email,
+      creadoEn: s.createdAt,
+      aprobadoPor: s.aprobadoPor?.user?.email,
+      aprobadoEn: s.aprobadoPor?.fecha,
+      procesadoPor: s.procesadoPor?.user?.email,
+      procesadoEn: s.procesadoPor?.fecha,
+      revertido: s.revertido ? 'Sí' : 'No',
+    }));
+
+    return this.exportService.generateExcel(rows, [
+      { header: 'Tipo', key: 'tipo', type: 'string' as any },
+      { header: 'Referencia', key: 'referencia', type: 'string' as any },
+      { header: 'Proveedor', key: 'proveedor', type: 'string' as any },
+      { header: 'CUIT', key: 'cuit', type: 'string' as any },
+      { header: 'Monto', key: 'monto', type: 'currency' as any },
+      { header: 'Medio Pago', key: 'medioPago', type: 'string' as any },
+      { header: 'Estado', key: 'estado', type: 'string' as any },
+      { header: 'F. Vencimiento', key: 'fechaVencimiento', type: 'date' as any },
+      { header: 'Creado por', key: 'creadoPor', type: 'string' as any },
+      { header: 'Creado en', key: 'creadoEn', type: 'datetime' as any },
+      { header: 'Aprobado por', key: 'aprobadoPor', type: 'string' as any },
+      { header: 'Aprobado en', key: 'aprobadoEn', type: 'datetime' as any },
+      { header: 'Procesado por', key: 'procesadoPor', type: 'string' as any },
+      { header: 'Procesado en', key: 'procesadoEn', type: 'datetime' as any },
+      { header: 'Revertido', key: 'revertido', type: 'string' as any },
+    ], 'Solicitudes de Pago');
+  }
 
   async create(dto: CreateSolicitudPagoDto, user: AuthUser): Promise<SolicitudPagoDocument> {
     if (!dto.factura === !dto.ordenPago) {
@@ -464,6 +522,78 @@ export class SolicitudPagoService {
   /**
    * Verifica integridad de la cadena de historial.
    */
+  async revertir(id: string, dto: RevertirDto, user: AuthUser): Promise<SolicitudPagoDocument> {
+    const sol = await this.solicitudModel.findById(id);
+    if (!sol) throw new NotFoundException('Solicitud no encontrada');
+    if (sol.estado !== 'procesado') {
+      throw new BadRequestException(`Solo se puede revertir una solicitud procesada (estado actual: ${sol.estado})`);
+    }
+    if (sol.revertido) {
+      throw new BadRequestException('La solicitud ya fue revertida');
+    }
+
+    // Adquisición atómica del flag revertido
+    const acquired = await this.solicitudModel.findOneAndUpdate(
+      { _id: new Types.ObjectId(id), estado: 'procesado', revertido: { $ne: true } },
+      { $set: { revertido: true } },
+      { new: true },
+    );
+    if (!acquired) {
+      throw new ConflictException('La solicitud fue modificada por otro usuario');
+    }
+
+    // Anular el Pago generado
+    if (sol.pagoGenerado) {
+      await this.pagoModel.updateOne(
+        { _id: sol.pagoGenerado },
+        { $set: { estado: 'anulado' } },
+      );
+    }
+
+    // Recalcular saldos
+    if (sol.factura) {
+      await this.recalcFacturaSaldo(sol.factura);
+    } else if (sol.ordenPago) {
+      await this.revertirAplicacionEnOrden(sol.ordenPago, sol.monto);
+    }
+
+    const ahora = new Date();
+    const userId = new Types.ObjectId(user.userId);
+    acquired.revertidoPor = { user: userId, fecha: ahora, motivo: dto.motivo } as any;
+    await this.pushHistorial(acquired, {
+      accion: 'revertir',
+      usuario: userId,
+      motivo: dto.motivo,
+      fecha: ahora,
+    });
+    await acquired.save();
+    return acquired;
+  }
+
+  private async revertirAplicacionEnOrden(ordenId: any, monto: number): Promise<void> {
+    const orden = await this.ordenModel.findById(ordenId).populate('facturas');
+    if (!orden) return;
+    orden.montoPagado = Math.max(0, (orden.montoPagado || 0) - monto);
+    orden.saldoPendiente = orden.montoTotal - orden.montoPagado;
+    orden.estado = orden.saldoPendiente <= 0 ? 'pagada' : (orden.montoPagado > 0 ? 'parcial' : 'pendiente');
+    await orden.save();
+    // Distribuir la reversión a facturas más nuevas primero (espejo de aplicarPagoAOrden)
+    let restante = monto;
+    const facturas = (orden.facturas as any[])
+      .filter((f: any) => f.estado !== 'anulada')
+      .sort((a: any, b: any) => new Date(b.fecha).getTime() - new Date(a.fecha).getTime());
+    for (const f of facturas) {
+      if (restante <= 0) break;
+      const aplicado = f.montoPagado || 0;
+      const restar = Math.min(restante, aplicado);
+      f.montoPagado = aplicado - restar;
+      f.saldoPendiente = f.montoTotal - f.montoPagado;
+      f.estado = f.saldoPendiente <= 0 ? 'pagada' : (f.montoPagado > 0 ? 'parcial' : 'pendiente');
+      await f.save();
+      restante -= restar;
+    }
+  }
+
   async pendingCountForRole(role: string): Promise<{ count: number; estado: string | null }> {
     const map: Record<string, EstadoSolicitud> = {
       contabilidad: 'pendiente',
