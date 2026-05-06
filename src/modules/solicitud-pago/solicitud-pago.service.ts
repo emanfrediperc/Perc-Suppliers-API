@@ -88,8 +88,18 @@ export class SolicitudPagoService {
       displayRef = `Orden ${orden.numero}`;
     }
 
-    if (dto.monto > saldoDisponible) {
-      throw new BadRequestException(`Monto excede saldo pendiente (${saldoDisponible})`);
+    // Solicitudes activas (no procesadas/canceladas) ya comprometen saldo
+    const activasFilter: any = { estado: { $in: ['pendiente', 'en_proceso', 'pago_en_proceso_perc'] } };
+    if (dto.factura) activasFilter.factura = new Types.ObjectId(dto.factura);
+    else activasFilter.ordenPago = new Types.ObjectId(dto.ordenPago!);
+    const activas = await this.solicitudModel.find(activasFilter).select('monto').lean();
+    const yaComprometido = activas.reduce((sum, s) => sum + (s.monto || 0), 0);
+    const disponibleReal = saldoDisponible - yaComprometido;
+
+    if (dto.monto > disponibleReal) {
+      throw new BadRequestException(
+        `Monto excede saldo disponible. Saldo pendiente: ${saldoDisponible}, ya comprometido en otras solicitudes activas: ${yaComprometido}, disponible: ${disponibleReal}`,
+      );
     }
 
     const ahora = new Date();
