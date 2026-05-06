@@ -15,6 +15,7 @@ import { PagoCalculatorService } from '../../common/services/pago-calculator.ser
 import { EmailService } from '../../integrations/email/email.service';
 import { HashChainService } from './hash-chain.service';
 import { TsaClient } from './tsa.client';
+import { ExportService } from '../../common/services/export.service';
 
 describe('SolicitudPagoService — state machine', () => {
   let service: SolicitudPagoService;
@@ -72,6 +73,7 @@ describe('SolicitudPagoService — state machine', () => {
         { provide: ConfigService, useValue: { get: () => '' } },
         HashChainService,
         { provide: TsaClient, useValue: { timestamp: jest.fn().mockResolvedValue({ token: null }), isEnabled: () => false } },
+        { provide: ExportService, useValue: { generateExcel: jest.fn().mockResolvedValue(Buffer.from('')) } },
       ],
     }).compile();
 
