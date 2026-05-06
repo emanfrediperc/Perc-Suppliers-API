@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException, BadRequestException, ForbiddenException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException, ForbiddenException, ConflictException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import {
@@ -186,10 +186,20 @@ export class SolicitudPagoService {
     if (!files.perc || !files.retenciones) {
       throw new BadRequestException('Procesar requiere ambos comprobantes (perc y retenciones)');
     }
-    const sol = await this.solicitudModel.findById(id);
-    if (!sol) throw new NotFoundException('Solicitud no encontrada');
-    if (!TRANSITIONS.procesar.includes(sol.estado)) {
-      throw new BadRequestException(`No se puede procesar desde estado "${sol.estado}"`);
+    const current = await this.solicitudModel.findById(id);
+    if (!current) throw new NotFoundException('Solicitud no encontrada');
+    if (!TRANSITIONS.procesar.includes(current.estado)) {
+      throw new BadRequestException(`No se puede procesar desde estado "${current.estado}"`);
+    }
+
+    // Adquisición atómica del estado "procesado"
+    const sol = await this.solicitudModel.findOneAndUpdate(
+      { _id: new Types.ObjectId(id), estado: current.estado },
+      { $set: { estado: 'procesado' } },
+      { new: true },
+    );
+    if (!sol) {
+      throw new ConflictException('La solicitud ya fue procesada por otro usuario');
     }
 
     const ahora = new Date();
@@ -262,16 +272,14 @@ export class SolicitudPagoService {
       await this.aplicarPagoAOrden(sol.ordenPago, sol.monto, pago._id as any);
     }
 
-    // Cerrar la solicitud
-    const estadoAnterior = sol.estado;
-    sol.estado = 'procesado';
+    // Estado ya fue puesto en 'procesado' arriba, ahora completamos audit
     sol.procesadoPor = { user: userId, fecha: ahora } as any;
     sol.comprobantes.push(...(subidos as any));
     sol.pagoGenerado = pago._id as any;
     await this.pushHistorial(sol, {
       accion: 'procesar',
       usuario: userId,
-      estadoAnterior,
+      estadoAnterior: current.estado,
       estadoNuevo: 'procesado',
       fecha: ahora,
     });
@@ -326,14 +334,26 @@ export class SolicitudPagoService {
     motivo: string | undefined,
     mutate: (doc: SolicitudPagoDocument) => void,
   ): Promise<SolicitudPagoDocument> {
-    const sol = await this.solicitudModel.findById(id);
-    if (!sol) throw new NotFoundException('Solicitud no encontrada');
     const allowed = TRANSITIONS[accion];
-    if (!allowed.includes(sol.estado)) {
-      throw new BadRequestException(`No se puede ${accion} desde estado "${sol.estado}"`);
+    const current = await this.solicitudModel.findById(id);
+    if (!current) throw new NotFoundException('Solicitud no encontrada');
+    if (!allowed.includes(current.estado)) {
+      throw new BadRequestException(`No se puede ${accion} desde estado "${current.estado}"`);
     }
-    const estadoAnterior = sol.estado;
-    sol.estado = estadoNuevo;
+    const estadoAnterior = current.estado;
+
+    // Adquisición atómica: solo un caller gana la transición.
+    const sol = await this.solicitudModel.findOneAndUpdate(
+      { _id: new Types.ObjectId(id), estado: estadoAnterior },
+      { $set: { estado: estadoNuevo } },
+      { new: true },
+    );
+    if (!sol) {
+      throw new ConflictException(
+        `La solicitud ya fue modificada por otro usuario, recargá y reintentá`,
+      );
+    }
+
     mutate(sol);
     await this.pushHistorial(sol, {
       accion,
