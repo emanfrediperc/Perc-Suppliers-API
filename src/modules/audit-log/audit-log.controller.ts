@@ -64,6 +64,12 @@ export class AuditLogController {
     }
   }
 
+  @Get('verificar-integridad/:entidad/:entidadId')
+  @Roles('admin')
+  verificarIntegridad(@Param('entidad') entidad: string, @Param('entidadId') entidadId: string) {
+    return this.service.verifyChain(entidad, entidadId);
+  }
+
   @Get(':entidad/:entidadId')
   @Roles('admin', 'tesoreria', 'operador', 'consulta')
   findByEntity(@Param('entidad') entidad: string, @Param('entidadId') entidadId: string) {

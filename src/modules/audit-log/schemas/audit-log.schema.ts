@@ -21,6 +21,8 @@ export class AuditLog {
       'token-emitido', 'token-emitido-reenvio',
       'decidir-via-token',
       'aprobacion-reenviada', 'rechazo-terminal',
+      'ejecutar', 'procesar', 'reagendar', 'revertir',
+      'apocrifo-override',
     ],
   })
   accion: string;
@@ -39,6 +41,15 @@ export class AuditLog {
 
   @Prop()
   descripcion: string;
+
+  // Hash encadenado por (entidad, entidadId): sha256(prevHash + canonical(entry))
+  // Permite detectar tampering en el audit log de cualquier entidad.
+  // Es best-effort: el log() es no-bloqueante, así que si falla el hash no rompe la operación.
+  @Prop()
+  hash?: string;
+
+  @Prop()
+  prevHash?: string;
 }
 
 export const AuditLogSchema = SchemaFactory.createForClass(AuditLog);
