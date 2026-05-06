@@ -73,4 +73,24 @@ export class ConvenioController {
   @Delete(':id/empresas/:empresaId')
   @Roles('admin')
   removeEmpresa(@Param('id') id: string, @Param('empresaId') empresaId: string) { return this.service.removeEmpresa(id, empresaId); }
+
+  @Get(':id/historico')
+  @Roles('admin', 'tesoreria', 'operador', 'consulta')
+  historico(@Param('id') id: string, @Query('empresaProveedora') empresaProveedora?: string) {
+    return this.service.getHistorico(id, empresaProveedora);
+  }
+
+  @Get(':id/historico/export')
+  @Roles('admin', 'tesoreria', 'operador', 'consulta')
+  async historicoExport(
+    @Param('id') id: string,
+    @Query('empresaProveedora') empresaProveedora: string | undefined,
+    @Res() res: express.Response,
+  ) {
+    const buffer = await this.service.getHistoricoExcel(id, empresaProveedora);
+    const filename = `productor-${id}-historico-${new Date().toISOString().slice(0, 10)}.xlsx`;
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.send(buffer);
+  }
 }
