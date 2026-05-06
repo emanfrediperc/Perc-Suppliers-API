@@ -44,6 +44,12 @@ export class SolicitudPagoController {
     return this.service.verificarIntegridad(id);
   }
 
+  @Get(':id/comprobante/:tipo')
+  @Roles('admin', 'tesoreria', 'contabilidad', 'operador', 'consulta')
+  comprobante(@Param('id') id: string, @Param('tipo') tipo: 'perc' | 'retenciones') {
+    return this.service.getComprobanteUrl(id, tipo);
+  }
+
   @Patch(':id/aprobar')
   @Roles('admin', 'contabilidad')
   aprobar(@Param('id') id: string, @Body() dto: AprobarDto, @CurrentUser() user: any) {

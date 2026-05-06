@@ -434,6 +434,15 @@ export class SolicitudPagoService {
   /**
    * Verifica integridad de la cadena de historial.
    */
+  async getComprobanteUrl(id: string, tipo: 'perc' | 'retenciones'): Promise<{ url: string; nombre: string }> {
+    const sol = await this.solicitudModel.findById(id).lean();
+    if (!sol) throw new NotFoundException('Solicitud no encontrada');
+    const comp = (sol.comprobantes || []).find((c: any) => c.tipo === tipo);
+    if (!comp) throw new NotFoundException(`Comprobante "${tipo}" no encontrado`);
+    const url = await this.storageService.getSignedDownloadUrl(comp.key);
+    return { url, nombre: comp.nombre };
+  }
+
   async verificarIntegridad(id: string): Promise<{ valid: boolean; brokenAt: number | null; total: number; conTsa: number }> {
     const sol = await this.solicitudModel.findById(id).lean();
     if (!sol) throw new NotFoundException('Solicitud no encontrada');
