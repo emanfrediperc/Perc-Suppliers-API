@@ -13,6 +13,7 @@ import { EmailModule } from '../../integrations/email/email.module';
 import { PagoCalculatorService } from '../../common/services/pago-calculator.service';
 import { HashChainService } from './hash-chain.service';
 import { TsaClient } from './tsa.client';
+import { SolicitudPagoCronService } from './solicitud-pago-cron.service';
 
 @Module({
   imports: [
@@ -28,7 +29,7 @@ import { TsaClient } from './tsa.client';
     ]),
   ],
   controllers: [SolicitudPagoController],
-  providers: [SolicitudPagoService, PagoCalculatorService, HashChainService, TsaClient],
+  providers: [SolicitudPagoService, PagoCalculatorService, HashChainService, TsaClient, SolicitudPagoCronService],
   exports: [SolicitudPagoService],
 })
 export class SolicitudPagoModule {}

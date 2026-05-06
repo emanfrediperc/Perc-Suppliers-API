@@ -32,6 +32,12 @@ export class SolicitudPagoController {
     return this.service.findAll(query);
   }
 
+  @Get('pending-count')
+  @Roles('admin', 'tesoreria', 'contabilidad', 'operador', 'consulta')
+  pendingCount(@CurrentUser() user: { role: string }) {
+    return this.service.pendingCountForRole(user.role);
+  }
+
   @Get(':id')
   @Roles('admin', 'tesoreria', 'contabilidad', 'operador', 'consulta')
   findOne(@Param('id') id: string) {

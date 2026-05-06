@@ -464,6 +464,25 @@ export class SolicitudPagoService {
   /**
    * Verifica integridad de la cadena de historial.
    */
+  async pendingCountForRole(role: string): Promise<{ count: number; estado: string | null }> {
+    const map: Record<string, EstadoSolicitud> = {
+      contabilidad: 'pendiente',
+      tesoreria: 'en_proceso',
+      operador: 'pago_en_proceso_perc',
+    };
+    const estado = map[role] ?? null;
+    if (!estado && role !== 'admin') return { count: 0, estado: null };
+
+    if (role === 'admin') {
+      const count = await this.solicitudModel.countDocuments({
+        estado: { $in: ['pendiente', 'en_proceso', 'pago_en_proceso_perc'] },
+      });
+      return { count, estado: null };
+    }
+    const count = await this.solicitudModel.countDocuments({ estado });
+    return { count, estado };
+  }
+
   async getComprobanteUrl(id: string, tipo: 'perc' | 'retenciones'): Promise<{ url: string; nombre: string }> {
     const sol = await this.solicitudModel.findById(id).lean();
     if (!sol) throw new NotFoundException('Solicitud no encontrada');
