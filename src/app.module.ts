@@ -31,6 +31,7 @@ import { ConfiguracionModule } from './modules/configuracion/configuracion.modul
 import { PrestamosModule } from './modules/prestamos/prestamos.module';
 import { CompraMonedaExtranjeraModule } from './modules/compra-moneda-extranjera/compra-moneda-extranjera.module';
 import { SolicitudPagoModule } from './modules/solicitud-pago/solicitud-pago.module';
+import { IntegrationsStatusModule } from './modules/integrations-status/integrations-status.module';
 import { AuditLogInterceptor } from './modules/audit-log/audit-log.interceptor';
 
 @Module({
@@ -73,6 +74,7 @@ import { AuditLogInterceptor } from './modules/audit-log/audit-log.interceptor';
     PrestamosModule,
     CompraMonedaExtranjeraModule,
     SolicitudPagoModule,
+    IntegrationsStatusModule,
   ],
   providers: [
     {
