@@ -82,6 +82,10 @@ export class PagoService {
     const pago = await this.pagoModel.findById(id);
     if (!pago) throw new NotFoundException('Pago no encontrado');
     if (pago.estado === 'anulado') throw new BadRequestException('El pago ya esta anulado');
+    if (pago.estado === 'esperando_aprobacion')
+      throw new BadRequestException(
+        'No se puede anular un pago en espera de aprobacion; debe rechazarse mediante el flujo de aprobacion',
+      );
 
     const session = await this.connection.startSession();
     try {
