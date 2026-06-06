@@ -11,7 +11,8 @@ jobs:
   test:
     name: Unit + e2e (Mongo rs0)
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # e2e con Mongo rs0 es lento; 25 min para que cierre en verde (antes 15 timeouteaba).
+    timeout-minutes: 25
 
     env:
       MONGODB_URI: mongodb://localhost:27017/perc-suppliers-test?replicaSet=rs0&directConnection=true
@@ -19,8 +20,6 @@ jobs:
       ENABLE_MAGIC_LINK: 'true'
       MAGIC_LINK_BASE_URL: http://localhost:4200/aprobar
       MAGIC_LINK_TTL_HOURS: '48'
-      # No SMTP / no Resend — EmailService falls back to mock; e2e overrides
-      # the EmailService provider to capture magic-link tokens anyway.
 
     steps:
       - name: Checkout
@@ -34,29 +33,14 @@ jobs:
 
       - name: Start MongoDB with replica set
         run: |
-          # GitHub Actions' `services:` block can't pass --replSet to the
-          # container command, so start Mongo manually. Without a keyfile
-          # (not needed on a disposable test DB), rs0 can be initiated
-          # right away.
-          docker run -d --name mongo \
-            -p 27017:27017 \
-            mongo:7 --replSet rs0 --bind_ip_all
-
-          # Wait for mongod to accept connections
+          docker run -d --name mongo -p 27017:27017 mongo:7 --replSet rs0 --bind_ip_all
           echo "Waiting for mongod..."
           until docker exec mongo mongosh --quiet --eval "db.runCommand({ping:1}).ok" >/dev/null 2>&1; do
             sleep 1
           done
-
-          # Initiate the replica set
           docker exec mongo mongosh --quiet --eval '
-            rs.initiate({
-              _id: "rs0",
-              members: [{ _id: 0, host: "localhost:27017" }]
-            })
+            rs.initiate({ _id: "rs0", members: [{ _id: 0, host: "localhost:27017" }] })
           '
-
-          # Wait until the node reaches PRIMARY — required before transactions
           echo "Waiting for PRIMARY..."
           until docker exec mongo mongosh --quiet --eval 'rs.status().members[0].stateStr' 2>/dev/null | grep -q PRIMARY; do
             sleep 1
@@ -80,17 +64,39 @@ jobs:
         env:
           NODE_ENV: test
 
-      # Smoke-test de la imagen DESPLEGABLE (node dist/main.js, no ts-node).
-      # Caza el caso "tests verdes pero el container no arranca" (p.ej. dist/main.js
-      # inexistente) ANTES de publicar a GHCR / deployar a Railway.
+      - name: Dump MongoDB logs on failure
+        if: failure()
+        run: docker logs mongo --tail 200 || true
+
+  smoke:
+    name: Smoke — la imagen arranca y sirve
+    runs-on: ubuntu-latest
+    # Job PARALELO e independiente del e2e: valida que la imagen DESPLEGABLE
+    # (node dist/main.js) arranque y sirva /api/docs antes de publicar/deployar.
+    # Antes el smoke estaba como step DESPUES del e2e y quedaba skipped cuando
+    # el e2e timeouteaba. Caza la clase de bug dist/main.js.
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Start MongoDB (plano — solo para que el container arranque)
+        run: |
+          docker run -d --name mongo -p 27017:27017 mongo:7 --bind_ip_all
+          until docker exec mongo mongosh --quiet --eval "db.runCommand({ping:1}).ok" >/dev/null 2>&1; do
+            sleep 1
+          done
+          echo "MongoDB listo."
+
       - name: Build Docker image
         run: docker build -t perc-api:smoke .
 
-      - name: Smoke-test — el container arranca y sirve /api/docs
+      - name: Run container + healthcheck /api/docs
         run: |
           docker run -d --name api-smoke --network host \
-            -e MONGODB_URI="$MONGODB_URI" \
-            -e JWT_SECRET="$JWT_SECRET" \
+            -e MONGODB_URI="mongodb://localhost:27017/smoke" \
+            -e JWT_SECRET="ci-jwt-secret-at-least-32-characters-for-testing-only" \
             -e PORT=3100 \
             perc-api:smoke
 
@@ -109,10 +115,6 @@ jobs:
             echo "El container no respondió /api/docs a tiempo:"; docker logs api-smoke; exit 1
           fi
 
-      - name: Cleanup smoke container
+      - name: Cleanup
         if: always()
         run: docker rm -f api-smoke || true
-
-      - name: Dump MongoDB logs on failure
-        if: failure()
-        run: docker logs mongo --tail 200 || true
