@@ -80,6 +80,39 @@ jobs:
         env:
           NODE_ENV: test
 
+      # Smoke-test de la imagen DESPLEGABLE (node dist/main.js, no ts-node).
+      # Caza el caso "tests verdes pero el container no arranca" (p.ej. dist/main.js
+      # inexistente) ANTES de publicar a GHCR / deployar a Railway.
+      - name: Build Docker image
+        run: docker build -t perc-api:smoke .
+
+      - name: Smoke-test — el container arranca y sirve /api/docs
+        run: |
+          docker run -d --name api-smoke --network host \
+            -e MONGODB_URI="$MONGODB_URI" \
+            -e JWT_SECRET="$JWT_SECRET" \
+            -e PORT=3100 \
+            perc-api:smoke
+
+          echo "Esperando que el container sirva /api/docs..."
+          ok=0
+          for i in $(seq 1 30); do
+            if ! docker ps --filter name=api-smoke --filter status=running -q | grep -q .; then
+              echo "El container murió al arrancar:"; docker logs api-smoke; exit 1
+            fi
+            if curl -fsS http://localhost:3100/api/docs >/dev/null 2>&1; then
+              ok=1; echo "Container UP y sirviendo (intento $i)."; break
+            fi
+            sleep 2
+          done
+          if [ "$ok" != "1" ]; then
+            echo "El container no respondió /api/docs a tiempo:"; docker logs api-smoke; exit 1
+          fi
+
+      - name: Cleanup smoke container
+        if: always()
+        run: docker rm -f api-smoke || true
+
       - name: Dump MongoDB logs on failure
         if: failure()
         run: docker logs mongo --tail 200 || true

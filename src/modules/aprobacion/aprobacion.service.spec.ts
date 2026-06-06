@@ -21,7 +21,7 @@ import { NotificacionService } from '../notificacion/notificacion.service';
 import { ConfiguracionService } from '../configuracion/configuracion.service';
 import { AuditLogService } from '../audit-log/audit-log.service';
 import { EmailService } from '../../integrations/email/email.service';
-import { APROBACION_REENVIADA } from './events/aprobacion-resuelta.event';
+import { APROBACION_REENVIADA, APROBACION_RESUELTA } from './events/aprobacion-resuelta.event';
 
 // ─── Factories de mocks ───────────────────────────────────────────────────────
 
@@ -71,7 +71,7 @@ function buildAprobadorDoc(overrides: Partial<Record<string, any>> = {}) {
 
 // ─── Suite ────────────────────────────────────────────────────────────────────
 
-describe('AprobacionService — reenviar()', () => {
+describe('AprobacionService', () => {
   let service: AprobacionService;
 
   // Mocks de dependencias
@@ -329,6 +329,68 @@ describe('AprobacionService — reenviar()', () => {
           email: 'tesoreria@test.perc',
         }),
       ).rejects.toThrow(NotFoundException);
+    });
+  });
+
+  // ─── decidir() ─────────────────────────────────────────────────────────────
+  describe('decidir()', () => {
+    const aprobador = { userId: 'user-aprobador-001', email: 'aprobador@test.perc', nombre: 'Aprobador' };
+
+    it('lanza NotFoundException si la aprobación no existe', async () => {
+      aprobacionModelMock.findById.mockResolvedValue(null);
+      await expect(service.decidir('x', aprobador, 'aprobada')).rejects.toThrow(NotFoundException);
+    });
+
+    it('lanza BadRequestException si ya fue resuelta (estado !== pendiente)', async () => {
+      aprobacionModelMock.findById.mockResolvedValue(buildAprobacionDoc({ estado: 'aprobada' }));
+      await expect(service.decidir('x', aprobador, 'aprobada')).rejects.toThrow(BadRequestException);
+    });
+
+    it('lanza BadRequestException si el creador intenta aprobar su propia solicitud', async () => {
+      aprobacionModelMock.findById.mockResolvedValue(
+        buildAprobacionDoc({ estado: 'pendiente', createdBy: aprobador.userId, aprobadores: [] }),
+      );
+      await expect(service.decidir('x', aprobador, 'aprobada')).rejects.toThrow(BadRequestException);
+    });
+
+    it('lanza BadRequestException si el aprobador ya decidió', async () => {
+      aprobacionModelMock.findById.mockResolvedValue(
+        buildAprobacionDoc({ estado: 'pendiente', createdBy: 'creator', aprobadores: [{ userId: aprobador.userId }] }),
+      );
+      await expect(service.decidir('x', aprobador, 'aprobada')).rejects.toThrow(BadRequestException);
+    });
+
+    it('rechazada: marca estado rechazada, notifica al creador y emite evento', async () => {
+      const doc = buildAprobacionDoc({ estado: 'pendiente', createdBy: 'creator', aprobadores: [] });
+      aprobacionModelMock.findById.mockResolvedValue(doc);
+
+      await service.decidir('aprobacion-id-001', aprobador, 'rechazada', 'no conviene');
+
+      expect(doc.estado).toBe('rechazada');
+      expect(doc.aprobadores).toHaveLength(1);
+      expect(notifServiceMock.create).toHaveBeenCalled();
+      expect(eventEmitterMock.emit).toHaveBeenCalledWith(
+        APROBACION_RESUELTA,
+        expect.objectContaining({ estado: 'rechazada', entidad: 'prestamos' }),
+      );
+    });
+
+    it('aprobada (alcanza requeridas): marca aprobada, avisa a operadores y emite evento', async () => {
+      const doc = buildAprobacionDoc({ estado: 'pendiente', createdBy: 'creator', aprobadores: [], aprobacionesRequeridas: 1 });
+      aprobacionModelMock.findById.mockResolvedValue(doc);
+
+      await service.decidir('aprobacion-id-001', aprobador, 'aprobada');
+
+      expect(doc.estado).toBe('aprobada');
+      expect(notifServiceMock.notifyUsersByRole).toHaveBeenCalledWith(
+        ['operador'],
+        expect.anything(),
+        expect.objectContaining({ sendEmail: false }),
+      );
+      expect(eventEmitterMock.emit).toHaveBeenCalledWith(
+        APROBACION_RESUELTA,
+        expect.objectContaining({ estado: 'aprobada' }),
+      );
     });
   });
 });
