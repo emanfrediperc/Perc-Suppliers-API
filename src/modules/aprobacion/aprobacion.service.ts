@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException, BadRequestException, ForbiddenException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException, ForbiddenException, Logger } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
 import { ConfigService } from '@nestjs/config';
@@ -20,6 +20,8 @@ import { User, UserDocument } from '../../auth/schemas/user.schema';
 
 @Injectable()
 export class AprobacionService {
+  private readonly logger = new Logger(AprobacionService.name);
+
   constructor(
     @InjectModel(Aprobacion.name) private aprobacionModel: Model<AprobacionDocument>,
     @InjectModel(User.name) private userModel: Model<UserDocument>,
@@ -114,7 +116,7 @@ export class AprobacionService {
           solicitante: data.createdByEmail,
           magicLink,
           expiraEn,
-        }).catch(() => {});
+        }).catch((e) => this.logger.warn(`accion best-effort fallo: ${e?.message ?? e}`));
 
         // T021 — Auditar emisión del token
         this.auditLogService.log({
@@ -126,7 +128,7 @@ export class AprobacionService {
           cambios: { userEmail: aprobador.email },
           ip: 'system',
           descripcion: `Token magic-link emitido para aprobador ${aprobador.email}`,
-        }).catch(() => {});
+        }).catch((e) => this.logger.warn(`accion best-effort fallo: ${e?.message ?? e}`));
       }
     }
 
@@ -231,7 +233,7 @@ export class AprobacionService {
         cambios: { cicloNumero: (aprobacion.intentos.length + 1) },
         ip: 'system',
         descripcion: `Rechazo terminal tras ${aprobacion.intentos.length} ciclos`,
-      }).catch(() => {});
+      }).catch((e) => this.logger.warn(`accion best-effort fallo: ${e?.message ?? e}`));
     }
 
     // T020 — Emitir evento cuando la aprobación alcanza un estado terminal.
@@ -298,7 +300,7 @@ export class AprobacionService {
       cambios: { decision: decisionInterna, comentario: comentario ?? '' },
       ip,
       descripcion: `${user.email} - decidir-via-token aprobaciones ${aprobacionIdStr}`,
-    }).catch(() => {});
+    }).catch((e) => this.logger.warn(`accion best-effort fallo: ${e?.message ?? e}`));
 
     return aprobacion;
   }
@@ -400,7 +402,7 @@ export class AprobacionService {
             magicLink,
             expiraEn,
           })
-          .catch(() => {});
+          .catch((e) => this.logger.warn(`accion best-effort fallo: ${e?.message ?? e}`));
 
         // T038 — Auditar emisión de token en el reenvío
         this.auditLogService
@@ -414,7 +416,7 @@ export class AprobacionService {
             ip: 'system',
             descripcion: `Token magic-link emitido (reenvío) para aprobador ${aprobador.email}`,
           })
-          .catch(() => {});
+          .catch((e) => this.logger.warn(`accion best-effort fallo: ${e?.message ?? e}`));
       }
     }
 
@@ -447,7 +449,7 @@ export class AprobacionService {
         ip: 'system',
         descripcion: `Aprobación reenviada por ${user.email} — ciclo ${intentoNumero + 1}`,
       })
-      .catch(() => {});
+      .catch((e) => this.logger.warn(`accion best-effort fallo: ${e?.message ?? e}`));
 
     // Emitir evento para que los módulos upstream transicionen rechazado → esperando_aprobacion
     this.eventEmitter.emit(APROBACION_REENVIADA, {
@@ -518,7 +520,7 @@ export class AprobacionService {
         solicitante: aprobacion.createdByEmail,
         magicLink,
         expiraEn,
-      }).catch(() => {});
+      }).catch((e) => this.logger.warn(`accion best-effort fallo: ${e?.message ?? e}`));
 
       this.auditLogService.log({
         usuario: aprobadorId,
@@ -529,7 +531,7 @@ export class AprobacionService {
         cambios: { userEmail: aprobador.email, motivo: 'reenvio-mail-manual' },
         ip: 'system',
         descripcion: `Mail magic-link reenviado manualmente por ${user.email} a ${aprobador.email}`,
-      }).catch(() => {});
+      }).catch((e) => this.logger.warn(`accion best-effort fallo: ${e?.message ?? e}`));
     }
 
     return {

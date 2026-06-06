@@ -44,7 +44,8 @@ export class NotificacionService {
     // duplicados al mismo destinatario.
     if (options.sendEmail !== false) {
       for (const user of users) {
-        this.emailService.sendEmail(user.email, data.titulo, `<p>${data.mensaje}</p>`).catch(() => {});
+        this.emailService.sendEmail(user.email, data.titulo, `<p>${data.mensaje}</p>`)
+          .catch((e) => this.logger.warn(`envio de email a ${user.email} fallo: ${e?.message ?? e}`));
       }
     }
   }

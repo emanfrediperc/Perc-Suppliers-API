@@ -1,4 +1,4 @@
-import { Injectable, NestInterceptor, ExecutionContext, CallHandler } from '@nestjs/common';
+import { Injectable, NestInterceptor, ExecutionContext, CallHandler, Logger } from '@nestjs/common';
 import { Observable, tap } from 'rxjs';
 import { AuditLogService } from './audit-log.service';
 
@@ -11,6 +11,8 @@ const METHOD_ACTION_MAP: Record<string, string> = {
 
 @Injectable()
 export class AuditLogInterceptor implements NestInterceptor {
+  private readonly logger = new Logger(AuditLogInterceptor.name);
+
   constructor(private readonly auditService: AuditLogService) {}
 
   intercept(context: ExecutionContext, next: CallHandler): Observable<any> {
@@ -54,7 +56,7 @@ export class AuditLogInterceptor implements NestInterceptor {
             cambios: method === 'PATCH' || method === 'PUT' ? request.body : undefined,
             ip: request.ip,
             descripcion: `${user.email} - ${accion} ${entidad}${resultId ? ' ' + resultId : ''}`,
-          }).catch(() => {});
+          }).catch((e) => this.logger.warn(`audit-log fallo: ${e?.message ?? e}`));
         },
       }),
     );

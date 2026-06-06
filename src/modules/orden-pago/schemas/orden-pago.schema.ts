@@ -47,3 +47,4 @@ export const OrdenPagoSchema = SchemaFactory.createForClass(OrdenPago);
 
 OrdenPagoSchema.index({ empresaProveedora: 1, estado: 1 });
 OrdenPagoSchema.index({ estado: 1, fecha: -1 });
+OrdenPagoSchema.index({ finnegansId: 1 }); // lookup en sync Finnegans

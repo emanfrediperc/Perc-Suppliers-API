@@ -19,10 +19,11 @@ import { EmpresaCliente } from '../empresa-cliente/schemas/empresa-cliente.schem
 import { PagoCalculatorService } from '../../common/services/pago-calculator.service';
 import { AprobacionService } from '../aprobacion/aprobacion.service';
 
-// Query mock encadenable (.populate().populate()) y awaitable.
+// Query mock encadenable (.populate().populate().session()) y awaitable.
 function query<T>(value: T) {
   const q: any = {};
   q.populate = jest.fn(() => q);
+  q.session = jest.fn(() => q);
   q.then = (resolve: (v: T) => void) => resolve(value);
   return q;
 }
@@ -110,7 +111,14 @@ describe('OrdenPagoService', () => {
     });
   });
 
-  describe('pagar() — guards previos a la transaccion', () => {
+  describe('pagar() — guards (dentro de la transaccion)', () => {
+    beforeEach(() => {
+      connection.startSession.mockResolvedValue({
+        withTransaction: async (cb: any) => cb(),
+        endSession: jest.fn(),
+      });
+    });
+
     it('lanza NotFound si la orden no existe', async () => {
       ordenModel.findById.mockReturnValue(query(null));
       await expect(service.pagar('x', { montoBase: 100, medioPago: 'transferencia' } as any)).rejects.toBeInstanceOf(NotFoundException);

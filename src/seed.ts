@@ -1,3 +1,7 @@
+// Cargar .env ANTES del guard de abajo: si no, process.env.MONGODB_URI no refleja
+// el .env (lo carga ConfigModule recién dentro de createApplicationContext) y el
+// guard contra Atlas/prod no protegería el caso real. dotenv no pisa vars del shell.
+import 'dotenv/config';
 import { randomBytes } from 'crypto';
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
@@ -18,9 +22,23 @@ function daysFromNow(n: number): Date {
 }
 
 async function seed() {
-  if (process.env.NODE_ENV === 'production' && process.env.ALLOW_SEED !== '1') {
-    throw new Error('Seed no permitido en producción. Seteá ALLOW_SEED=1 para forzar.');
+  const mongoUri = process.env.MONGODB_URI || 'mongodb://localhost:27017/perc-suppliers';
+  // El seed limpia TODAS las colecciones. El guard por NODE_ENV no alcanza:
+  // localmente NODE_ENV no es 'production' aunque la URI apunte a Atlas/prod, así
+  // que un `npm run seed` accidental con el .env de prod borra producción.
+  // Bloqueamos también por la URI (Atlas / mongodb+srv / *.mongodb.net).
+  const isRemoteDb = /mongodb\+srv:\/\//i.test(mongoUri) || /mongodb\.net/i.test(mongoUri);
+  const targetHost = mongoUri.split('@')[1]?.split(/[/?]/)[0]
+    ?? mongoUri.replace(/^mongodb(\+srv)?:\/\//, '').split(/[/?]/)[0];
+
+  if ((process.env.NODE_ENV === 'production' || isRemoteDb) && process.env.ALLOW_SEED !== '1') {
+    throw new Error(
+      `Seed BLOQUEADO: la base parece de produccion/remota (host: ${targetHost}). ` +
+        `El seed limpia TODAS las colecciones. Solo si estas 100% seguro, seteá ALLOW_SEED=1.`,
+    );
   }
+  console.warn(`[seed] Destino: ${targetHost} — se limpiaran TODAS las colecciones.`);
+
   const seedPassword = process.env.SEED_PASSWORD || randomBytes(9).toString('base64url');
 
   const app = await NestFactory.createApplicationContext(AppModule);

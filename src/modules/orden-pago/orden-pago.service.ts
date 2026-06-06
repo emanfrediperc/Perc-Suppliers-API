@@ -88,7 +88,7 @@ export class OrdenPagoService {
     }
     const sort: any = sortBy ? { [sortBy]: sortOrder === 'asc' ? 1 : -1 } : { fecha: -1 };
     const [data, total] = await Promise.all([
-      this.ordenModel.find(filter).populate('empresaProveedora').populate({ path: 'facturas', populate: { path: 'empresaCliente' } }).sort(sort).skip((page - 1) * limit).limit(limit),
+      this.ordenModel.find(filter).populate('empresaProveedora').populate({ path: 'facturas', populate: { path: 'empresaCliente' } }).sort(sort).skip((page - 1) * limit).limit(limit).lean(),
       this.ordenModel.countDocuments(filter),
     ]);
     return new PaginatedResponseDto(data, total, page, limit);
@@ -119,79 +119,87 @@ export class OrdenPagoService {
   }
 
   async pagar(ordenId: string, dto: PagarOrdenDto) {
-    const orden = await this.ordenModel.findById(ordenId).populate('empresaProveedora').populate('facturas');
-    if (!orden) throw new NotFoundException('Orden de pago no encontrada');
-    if (orden.estado === 'pagada') throw new BadRequestException('La orden ya esta completamente pagada');
-
-    const saldoPendiente = orden.montoTotal - (orden.montoPagado || 0);
-    if (dto.montoBase > saldoPendiente) {
-      throw new BadRequestException(`El monto ($${dto.montoBase}) excede el saldo pendiente ($${saldoPendiente})`);
-    }
-
-    // Buscar convenio del proveedor
-    const convenio = await this.convenioModel.findOne({ empresasProveedoras: orden.empresaProveedora._id, activo: true });
-    const calc = this.pagoCalculator.calculate(dto.montoBase, dto, convenio);
-
-    const pagoData: any = {
-      ordenPago: orden._id,
-      fechaPago: dto.fechaPago ? new Date(dto.fechaPago) : new Date(),
-      montoBase: dto.montoBase,
-      retencionIIBB: dto.retencionIIBB || 0,
-      retencionGanancias: dto.retencionGanancias || 0,
-      retencionIVA: dto.retencionIVA || 0,
-      retencionSUSS: dto.retencionSUSS || 0,
-      otrasRetenciones: dto.otrasRetenciones || 0,
-      ...calc,
-      medioPago: dto.medioPago,
-      referenciaPago: dto.referenciaPago,
-      observaciones: dto.observaciones,
-      estado: 'confirmado',
-    };
-    if (convenio) pagoData.convenioAplicado = convenio._id;
-
-    // Use transaction for data integrity across Pago, Factura, and OrdenPago
+    // Transacción con la LECTURA adentro (con .session): el guard de saldo y la
+    // actualización son atómicos → evita sobrepago/doble-pago bajo concurrencia.
     const session = await this.connection.startSession();
     try {
-      session.startTransaction();
+      let pagoId: Types.ObjectId | undefined;
+      let ordenNumero = '';
+      await session.withTransaction(async () => {
+        const orden = await this.ordenModel
+          .findById(ordenId)
+          .populate('empresaProveedora')
+          .populate('facturas')
+          .session(session);
+        if (!orden) throw new NotFoundException('Orden de pago no encontrada');
+        if (orden.estado === 'pagada') throw new BadRequestException('La orden ya esta completamente pagada');
 
-      const [pago] = await this.pagoModel.create([pagoData], { session });
-
-      // Actualizar montos de la orden
-      orden.montoPagado = (orden.montoPagado || 0) + dto.montoBase;
-      orden.saldoPendiente = orden.montoTotal - orden.montoPagado;
-      (orden.pagos as any[]).push(pago._id);
-      orden.estado = orden.saldoPendiente <= 0 ? 'pagada' : 'parcial';
-      if (orden.saldoPendiente < 0) orden.saldoPendiente = 0;
-      await orden.save({ session });
-
-      // Distribuir pago entre facturas pendientes de la orden (por antigüedad)
-      let restante = dto.montoBase;
-      const facturasPendientes = (orden.facturas as any[])
-        .filter((f: any) => f.estado !== 'pagada' && f.estado !== 'anulada')
-        .sort((a: any, b: any) => new Date(a.fecha).getTime() - new Date(b.fecha).getTime());
-
-      for (const factura of facturasPendientes) {
-        if (restante <= 0) break;
-        const aplicar = Math.min(restante, factura.saldoPendiente);
-        factura.montoPagado += aplicar;
-        factura.saldoPendiente = factura.montoTotal - factura.montoPagado;
-        if (factura.saldoPendiente <= 0) {
-          factura.saldoPendiente = 0;
-          factura.estado = 'pagada';
-        } else {
-          factura.estado = 'parcial';
+        const saldoPendiente = orden.montoTotal - (orden.montoPagado || 0);
+        if (dto.montoBase > saldoPendiente) {
+          throw new BadRequestException(`El monto ($${dto.montoBase}) excede el saldo pendiente ($${saldoPendiente})`);
         }
-        (factura.pagos as any[]).push(pago._id);
-        await factura.save({ session });
-        restante -= aplicar;
-      }
 
-      await session.commitTransaction();
-      this.logger.log(`Pago ${pago._id} creado para orden ${orden.numero} - Monto: ${dto.montoBase}`);
-      return this.pagoModel.findById(pago._id).populate('convenioAplicado');
-    } catch (error) {
-      await session.abortTransaction();
-      throw error;
+        // Buscar convenio del proveedor
+        const convenio = await this.convenioModel
+          .findOne({ empresasProveedoras: orden.empresaProveedora._id, activo: true })
+          .session(session);
+        const calc = this.pagoCalculator.calculate(dto.montoBase, dto, convenio);
+
+        const pagoData: any = {
+          ordenPago: orden._id,
+          fechaPago: dto.fechaPago ? new Date(dto.fechaPago) : new Date(),
+          montoBase: dto.montoBase,
+          retencionIIBB: dto.retencionIIBB || 0,
+          retencionGanancias: dto.retencionGanancias || 0,
+          retencionIVA: dto.retencionIVA || 0,
+          retencionSUSS: dto.retencionSUSS || 0,
+          otrasRetenciones: dto.otrasRetenciones || 0,
+          ...calc,
+          medioPago: dto.medioPago,
+          referenciaPago: dto.referenciaPago,
+          observaciones: dto.observaciones,
+          estado: 'confirmado',
+        };
+        if (convenio) pagoData.convenioAplicado = convenio._id;
+
+        const [pago] = await this.pagoModel.create([pagoData], { session });
+
+        // Actualizar montos de la orden
+        orden.montoPagado = (orden.montoPagado || 0) + dto.montoBase;
+        orden.saldoPendiente = orden.montoTotal - orden.montoPagado;
+        (orden.pagos as any[]).push(pago._id);
+        orden.estado = orden.saldoPendiente <= 0 ? 'pagada' : 'parcial';
+        if (orden.saldoPendiente < 0) orden.saldoPendiente = 0;
+        await orden.save({ session });
+
+        // Distribuir pago entre facturas pendientes de la orden (por antigüedad)
+        let restante = dto.montoBase;
+        const facturasPendientes = (orden.facturas as any[])
+          .filter((f: any) => f.estado !== 'pagada' && f.estado !== 'anulada')
+          .sort((a: any, b: any) => new Date(a.fecha).getTime() - new Date(b.fecha).getTime());
+
+        for (const factura of facturasPendientes) {
+          if (restante <= 0) break;
+          const aplicar = Math.min(restante, factura.saldoPendiente);
+          factura.montoPagado += aplicar;
+          factura.saldoPendiente = factura.montoTotal - factura.montoPagado;
+          if (factura.saldoPendiente <= 0) {
+            factura.saldoPendiente = 0;
+            factura.estado = 'pagada';
+          } else {
+            factura.estado = 'parcial';
+          }
+          (factura.pagos as any[]).push(pago._id);
+          await factura.save({ session });
+          restante -= aplicar;
+        }
+
+        pagoId = pago._id;
+        ordenNumero = orden.numero;
+      });
+
+      this.logger.log(`Pago ${pagoId} creado para orden ${ordenNumero} - Monto: ${dto.montoBase}`);
+      return this.pagoModel.findById(pagoId).populate('convenioAplicado');
     } finally {
       session.endSession();
     }

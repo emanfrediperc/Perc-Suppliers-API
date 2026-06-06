@@ -87,3 +87,4 @@ FacturaSchema.index({ empresaProveedora: 1, estado: 1 });
 FacturaSchema.index({ estado: 1, fechaVencimiento: 1 });
 FacturaSchema.index({ fecha: -1 });
 FacturaSchema.index({ numero: 1, empresaProveedora: 1 });
+FacturaSchema.index({ finnegansId: 1 }); // lookup en sync Finnegans

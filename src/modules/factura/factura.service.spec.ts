@@ -26,6 +26,7 @@ import { ApocrifosService } from '../../integrations/apocrifos/apocrifos.service
 function query<T>(value: T) {
   const q: any = {};
   q.populate = jest.fn(() => q);
+  q.session = jest.fn(() => q);
   q.then = (resolve: (v: T) => void) => resolve(value);
   return q;
 }
@@ -36,12 +37,14 @@ describe('FacturaService', () => {
   let empresaProvModel: any;
   let apocrifosService: { consultar: jest.Mock };
   let afipService: { isConfigured: jest.Mock; consultarCuit: jest.Mock };
+  let connection: any;
 
   beforeEach(async () => {
     facturaModel = { create: jest.fn(), findById: jest.fn(), findOne: jest.fn() };
     empresaProvModel = { findById: jest.fn() };
     apocrifosService = { consultar: jest.fn() };
     afipService = { isConfigured: jest.fn().mockReturnValue(false), consultarCuit: jest.fn() };
+    connection = { startSession: jest.fn() };
 
     const moduleRef: TestingModule = await Test.createTestingModule({
       providers: [
@@ -54,7 +57,7 @@ describe('FacturaService', () => {
         { provide: getModelToken(EmpresaCliente.name), useValue: {} },
         { provide: StorageService, useValue: {} },
         { provide: GeminiService, useValue: {} },
-        { provide: getConnectionToken(), useValue: { startSession: jest.fn() } },
+        { provide: getConnectionToken(), useValue: connection },
         { provide: PagoCalculatorService, useValue: { calculate: jest.fn() } },
         { provide: AfipService, useValue: afipService },
         { provide: ApocrifosService, useValue: apocrifosService },
@@ -113,6 +116,13 @@ describe('FacturaService', () => {
   });
 
   describe('pagar() — guards', () => {
+    beforeEach(() => {
+      connection.startSession.mockResolvedValue({
+        withTransaction: async (cb: any) => cb(),
+        endSession: jest.fn(),
+      });
+    });
+
     it('lanza NotFound si la factura no existe', async () => {
       facturaModel.findById.mockReturnValue(query(null));
       await expect(service.pagar('x', { montoBase: 100, medioPago: 'transferencia' } as any)).rejects.toBeInstanceOf(NotFoundException);

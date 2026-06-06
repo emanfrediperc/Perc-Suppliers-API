@@ -60,7 +60,7 @@ export class PagoService {
     const { page, limit, sortBy, sortOrder } = query;
     const sort: any = sortBy ? { [sortBy]: sortOrder === 'asc' ? 1 : -1 } : { fechaPago: -1 };
     const [data, total] = await Promise.all([
-      this.pagoModel.find().populate({ path: 'factura', populate: { path: 'empresaProveedora' } }).populate('convenioAplicado').sort(sort).skip((page - 1) * limit).limit(limit),
+      this.pagoModel.find().populate({ path: 'factura', populate: { path: 'empresaProveedora' } }).populate('convenioAplicado').sort(sort).skip((page - 1) * limit).limit(limit).lean(),
       this.pagoModel.countDocuments(),
     ]);
     return new PaginatedResponseDto(data, total, page, limit);

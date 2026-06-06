@@ -80,7 +80,7 @@ export class FacturaService {
     }
     const sort: any = sortBy ? { [sortBy]: sortOrder === 'asc' ? 1 : -1 } : { fecha: -1 };
     const [data, total] = await Promise.all([
-      this.facturaModel.find(filter).populate('empresaProveedora').populate('empresaCliente').populate('ordenPago').sort(sort).skip((page - 1) * limit).limit(limit),
+      this.facturaModel.find(filter).populate('empresaProveedora').populate('empresaCliente').populate('ordenPago').sort(sort).skip((page - 1) * limit).limit(limit).lean(),
       this.facturaModel.countDocuments(filter),
     ]);
     return new PaginatedResponseDto(data, total, page, limit);
@@ -141,54 +141,53 @@ export class FacturaService {
   }
 
   async pagar(facturaId: string, dto: PagarFacturaDto) {
-    const factura = await this.facturaModel.findById(facturaId).populate('empresaProveedora');
-    if (!factura) throw new NotFoundException('Factura no encontrada');
-    if (factura.estado === 'pagada') throw new BadRequestException('La factura ya esta completamente pagada');
-    if (dto.montoBase > factura.saldoPendiente) throw new BadRequestException(`El monto base ($${dto.montoBase}) excede el saldo pendiente ($${factura.saldoPendiente})`);
-
-    const convenio = await this.convenioModel.findOne({ empresasProveedoras: factura.empresaProveedora._id, activo: true });
-    const calc = this.pagoCalculator.calculate(dto.montoBase, dto, convenio);
-
-    const pagoData: any = {
-      factura: factura._id, fechaPago: dto.fechaPago ? new Date(dto.fechaPago) : new Date(),
-      montoBase: dto.montoBase, retencionIIBB: dto.retencionIIBB || 0, retencionGanancias: dto.retencionGanancias || 0,
-      retencionIVA: dto.retencionIVA || 0, retencionSUSS: dto.retencionSUSS || 0, otrasRetenciones: dto.otrasRetenciones || 0,
-      ...calc,
-      medioPago: dto.medioPago, referenciaPago: dto.referenciaPago, observaciones: dto.observaciones,
-      estado: 'confirmado',
-    };
-    if (convenio) pagoData.convenioAplicado = convenio._id;
-
-    // Use transaction for data integrity across Pago, Factura, and OrdenPago
+    // Transacción con la LECTURA adentro (con .session): guard de saldo + update atómicos.
     const session = await this.connection.startSession();
     try {
-      session.startTransaction();
+      let pagoId: Types.ObjectId | undefined;
+      await session.withTransaction(async () => {
+        const factura = await this.facturaModel.findById(facturaId).populate('empresaProveedora').session(session);
+        if (!factura) throw new NotFoundException('Factura no encontrada');
+        if (factura.estado === 'pagada') throw new BadRequestException('La factura ya esta completamente pagada');
+        if (dto.montoBase > factura.saldoPendiente) throw new BadRequestException(`El monto base ($${dto.montoBase}) excede el saldo pendiente ($${factura.saldoPendiente})`);
 
-      const [pago] = await this.pagoModel.create([pagoData], { session });
+        const convenio = await this.convenioModel.findOne({ empresasProveedoras: factura.empresaProveedora._id, activo: true }).session(session);
+        const calc = this.pagoCalculator.calculate(dto.montoBase, dto, convenio);
 
-      factura.montoPagado += dto.montoBase;
-      factura.saldoPendiente = factura.montoTotal - factura.montoPagado;
-      (factura.pagos as any[]).push(pago._id);
-      factura.estado = factura.saldoPendiente <= 0 ? 'pagada' : 'parcial';
-      if (factura.saldoPendiente < 0) factura.saldoPendiente = 0;
-      await factura.save({ session });
+        const pagoData: any = {
+          factura: factura._id, fechaPago: dto.fechaPago ? new Date(dto.fechaPago) : new Date(),
+          montoBase: dto.montoBase, retencionIIBB: dto.retencionIIBB || 0, retencionGanancias: dto.retencionGanancias || 0,
+          retencionIVA: dto.retencionIVA || 0, retencionSUSS: dto.retencionSUSS || 0, otrasRetenciones: dto.otrasRetenciones || 0,
+          ...calc,
+          medioPago: dto.medioPago, referenciaPago: dto.referenciaPago, observaciones: dto.observaciones,
+          estado: 'confirmado',
+        };
+        if (convenio) pagoData.convenioAplicado = convenio._id;
 
-      if (factura.ordenPago) {
-        const orden = await this.ordenModel.findById(factura.ordenPago).populate('facturas');
-        if (orden) {
-          const allPaid = (orden.facturas as any[]).every((f: any) => f.estado === 'pagada');
-          const anyPaid = (orden.facturas as any[]).some((f: any) => f.estado === 'pagada' || f.estado === 'parcial');
-          if (allPaid) orden.estado = 'pagada';
-          else if (anyPaid) orden.estado = 'parcial';
-          await orden.save({ session });
+        const [pago] = await this.pagoModel.create([pagoData], { session });
+
+        factura.montoPagado += dto.montoBase;
+        factura.saldoPendiente = factura.montoTotal - factura.montoPagado;
+        (factura.pagos as any[]).push(pago._id);
+        factura.estado = factura.saldoPendiente <= 0 ? 'pagada' : 'parcial';
+        if (factura.saldoPendiente < 0) factura.saldoPendiente = 0;
+        await factura.save({ session });
+
+        if (factura.ordenPago) {
+          const orden = await this.ordenModel.findById(factura.ordenPago).populate('facturas').session(session);
+          if (orden) {
+            const allPaid = (orden.facturas as any[]).every((f: any) => f.estado === 'pagada');
+            const anyPaid = (orden.facturas as any[]).some((f: any) => f.estado === 'pagada' || f.estado === 'parcial');
+            if (allPaid) orden.estado = 'pagada';
+            else if (anyPaid) orden.estado = 'parcial';
+            await orden.save({ session });
+          }
         }
-      }
 
-      await session.commitTransaction();
-      return this.pagoModel.findById(pago._id).populate('convenioAplicado');
-    } catch (error) {
-      await session.abortTransaction();
-      throw error;
+        pagoId = pago._id;
+      });
+
+      return this.pagoModel.findById(pagoId).populate('convenioAplicado');
     } finally {
       session.endSession();
     }

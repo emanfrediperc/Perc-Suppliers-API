@@ -1,4 +1,4 @@
-import { IsString, IsNotEmpty, IsOptional, IsNumber, IsDateString, IsEnum, IsMongoId } from 'class-validator';
+import { IsString, IsNotEmpty, IsOptional, IsNumber, IsDateString, IsEnum, IsMongoId, IsPositive, Min } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 
 export class CreateFacturaDto {
@@ -7,9 +7,9 @@ export class CreateFacturaDto {
   @ApiProperty({ enum: ['A', 'B', 'C', 'M', 'E', 'NC-A', 'NC-B', 'NC-C', 'ND-A', 'ND-B', 'ND-C'] }) @IsEnum(['A', 'B', 'C', 'M', 'E', 'NC-A', 'NC-B', 'NC-C', 'ND-A', 'ND-B', 'ND-C']) tipo: string;
   @ApiProperty() @IsDateString() fecha: string;
   @ApiPropertyOptional() @IsOptional() @IsDateString() fechaVencimiento?: string;
-  @ApiProperty({ example: 100000 }) @IsNumber() montoNeto: number;
-  @ApiPropertyOptional({ example: 21000 }) @IsOptional() @IsNumber() montoIva?: number;
-  @ApiProperty({ example: 121000 }) @IsNumber() montoTotal: number;
+  @ApiProperty({ example: 100000 }) @IsNumber() @Min(0) montoNeto: number;
+  @ApiPropertyOptional({ example: 21000 }) @IsOptional() @IsNumber() @Min(0) montoIva?: number;
+  @ApiProperty({ example: 121000 }) @IsNumber() @IsPositive() montoTotal: number;
   @ApiPropertyOptional({ example: 'ARS' }) @IsOptional() @IsString() moneda?: string;
   @ApiProperty() @IsMongoId() @IsNotEmpty() empresaProveedora: string;
   @ApiProperty() @IsMongoId() @IsNotEmpty() empresaCliente: string;
