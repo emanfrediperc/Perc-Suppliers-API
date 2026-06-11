@@ -6,8 +6,8 @@ import { RolesGuard } from '../../auth/guards/roles.guard';
 import { Roles } from '../../auth/decorators/roles.decorator';
 import { CurrentUser } from '../../auth/decorators/current-user.decorator';
 import {
-  puedeVerCbu,
-  enmascararEmpresaBancarios,
+  prepararEmpresaBancarios,
+  descifrarCbu,
 } from '../../common/utils/datos-bancarios.util';
 import { ReporteService } from './reporte.service';
 import {
@@ -242,7 +242,7 @@ export class ReporteController {
       { campo: 'Email', valor: prov.email || '—' },
       { campo: 'Teléfono', valor: prov.telefono || '—' },
       { campo: 'Dirección', valor: prov.direccion || '—' },
-      { campo: 'CBU', valor: prov.datosBancarios?.cbu || '—' },
+      { campo: 'CBU', valor: descifrarCbu(prov.datosBancarios?.cbu) || '—' },
       { campo: '', valor: '' },
       {
         campo: 'Total Facturado',
@@ -518,8 +518,12 @@ export class ReporteController {
     @CurrentUser() user: any,
   ) {
     const res = await this.service.getEstadoCuentaProveedor(dto);
-    if (puedeVerCbu(user?.role) || !res?.proveedor) return res;
-    return { ...res, proveedor: enmascararEmpresaBancarios(res.proveedor) };
+    if (!res?.proveedor) return res;
+    // Descifra el CBU para quien puede verlo; lo enmascara para 'consulta'.
+    return {
+      ...res,
+      proveedor: prepararEmpresaBancarios(res.proveedor, user?.role),
+    };
   }
 
   @Get('estado-cuenta-completo/:empresaProveedoraId')

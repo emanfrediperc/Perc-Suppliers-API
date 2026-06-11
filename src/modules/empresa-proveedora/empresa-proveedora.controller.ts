@@ -16,10 +16,7 @@ import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../../auth/guards/roles.guard';
 import { Roles } from '../../auth/decorators/roles.decorator';
 import { CurrentUser } from '../../auth/decorators/current-user.decorator';
-import {
-  puedeVerCbu,
-  enmascararEmpresaBancarios,
-} from '../../common/utils/datos-bancarios.util';
+import { prepararEmpresaBancarios } from '../../common/utils/datos-bancarios.util';
 import { EmpresaProveedoraService } from './empresa-proveedora.service';
 import { CreateEmpresaProveedoraDto } from './dto/create-empresa-proveedora.dto';
 import { UpdateEmpresaProveedoraDto } from './dto/update-empresa-proveedora.dto';
@@ -55,8 +52,11 @@ export class EmpresaProveedoraController {
   ) {
     const sinConvenio = query.sinConvenio === 'true';
     const res = await this.service.findAll(query, sinConvenio);
-    if (puedeVerCbu(user?.role)) return res;
-    return { ...res, data: res.data.map(enmascararEmpresaBancarios) };
+    // Descifra el CBU para quien puede verlo; lo enmascara para el resto.
+    return {
+      ...res,
+      data: res.data.map((e) => prepararEmpresaBancarios(e, user?.role)),
+    };
   }
 
   @Get('export')
@@ -72,10 +72,10 @@ export class EmpresaProveedoraController {
       bigQuery,
       query.sinConvenio === 'true',
     );
-    // El export de operador (que no ejecuta pagos) lleva el CBU enmascarado.
-    if (!puedeVerCbu(user?.role)) {
-      result.data = result.data.map(enmascararEmpresaBancarios);
-    }
+    // CBU descifrado para quien puede verlo (admin/tesorería/operador), enmascarado para el resto.
+    result.data = result.data.map((e) =>
+      prepararEmpresaBancarios(e, user?.role),
+    ) as typeof result.data;
     const columns: ExportColumn[] = [
       { header: 'Razón Social', key: 'razonSocial', type: 'text', width: 32 },
       {
@@ -138,7 +138,7 @@ export class EmpresaProveedoraController {
   @Roles('admin', 'tesoreria', 'operador')
   async findOne(@Param('id') id: string, @CurrentUser() user: any) {
     const emp = await this.service.findOne(id);
-    return puedeVerCbu(user?.role) ? emp : enmascararEmpresaBancarios(emp);
+    return prepararEmpresaBancarios(emp, user?.role);
   }
 
   @Patch(':id')
