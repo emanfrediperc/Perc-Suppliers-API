@@ -14,6 +14,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
+import { Throttle } from '@nestjs/throttler';
 import {
   ApiBearerAuth,
   ApiTags,
@@ -167,6 +168,8 @@ export class FacturaController {
 
   @Post('ocr')
   @Roles('admin', 'tesoreria')
+  // OCR cuesta dinero (Gemini): limitar para evitar abuso/agotamiento de cuota.
+  @Throttle({ default: { ttl: 60_000, limit: 10 } })
   @ApiConsumes('multipart/form-data')
   @UseInterceptors(
     FileInterceptor('archivo', { limits: { fileSize: MAX_SIZE } }),
@@ -202,6 +205,11 @@ export class FacturaController {
     const factura = await this.service.findOne(id);
     if (!factura.archivoKey)
       throw new NotFoundException('La factura no tiene archivo adjunto');
+    // Defensa: sólo firmar objetos del prefijo de facturas. Si archivoKey fue
+    // manipulado para apuntar a otro objeto del bucket, no se firma.
+    if (!factura.archivoKey.startsWith('facturas/')) {
+      throw new NotFoundException('Archivo no disponible');
+    }
     const url = await this.storageService.getSignedDownloadUrl(
       factura.archivoKey,
     );
