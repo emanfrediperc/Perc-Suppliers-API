@@ -5,6 +5,7 @@ import {
   Body,
   Param,
   Req,
+  HttpCode,
   ServiceUnavailableException,
   UnauthorizedException,
 } from '@nestjs/common';
@@ -83,6 +84,8 @@ export class AprobacionPublicController {
   }
 
   @Post('decidir-via-token')
+  // Decide sobre una aprobación existente (no crea recurso) → 200, igual que el gemelo PATCH :id/decidir.
+  @HttpCode(200)
   @Throttle({ default: { ttl: 60_000, limit: 10 } })
   @ApiOperation({
     summary: 'Decidir una aprobación vía magic-link token (público)',
