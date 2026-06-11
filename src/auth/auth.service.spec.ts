@@ -443,5 +443,20 @@ describe('AuthService', () => {
         service.loginVerificarTotp('viejo', '123456'),
       ).rejects.toThrow(UnauthorizedException);
     });
+
+    it('SEGURIDAD: loginVerificarTotp bloquea la cuenta tras 5 códigos inválidos', async () => {
+      enable2fa();
+      mockUser.totpHabilitado = true;
+      mockUser.totpSecretCifrado = cifrar('SECRETBASE32', TEST_ENC_KEY);
+      mockUser.codigosRecuperacion = [];
+      mockUser.failedLoginAttempts = 4; // el 5º fallo dispara el lockout
+      userModel.findById.mockResolvedValue(mockUser);
+      (authenticator.verify as jest.Mock).mockReturnValue(false);
+
+      await expect(
+        service.loginVerificarTotp('challenge', '000000'),
+      ).rejects.toThrow(UnauthorizedException);
+      expect(mockUser.lockUntil).not.toBeNull();
+    });
   });
 });

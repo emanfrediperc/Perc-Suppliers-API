@@ -18,8 +18,11 @@ export class FinnegansRealService extends IFinnegansService {
     this.baseUrl = this.configService.get<string>('finnegans.baseUrl') || '';
     this.authUrl = this.configService.get<string>('finnegans.authUrl') || '';
     this.clientId = this.configService.get<string>('finnegans.clientId') || '';
-    this.clientSecret = this.configService.get<string>('finnegans.clientSecret') || '';
-    this.logger.log(`Finnegans real service initialized — baseUrl: ${this.baseUrl}`);
+    this.clientSecret =
+      this.configService.get<string>('finnegans.clientSecret') || '';
+    this.logger.log(
+      `Finnegans real service initialized — baseUrl: ${this.baseUrl}`,
+    );
   }
 
   // ============ AUTH ============
@@ -40,13 +43,25 @@ export class FinnegansRealService extends IFinnegansService {
 
   // ============ HTTP HELPER ============
 
-  private async request<T>(url: string, method = 'GET', body?: any, skipAuth = false): Promise<T> {
-    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  private async request<T>(
+    url: string,
+    method = 'GET',
+    body?: any,
+    skipAuth = false,
+  ): Promise<T> {
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+    };
 
     const options: RequestInit = { method, headers };
     if (body) options.body = JSON.stringify(body);
 
-    this.logger.debug(`${method} ${url}`);
+    // Nunca loguear credenciales/tokens que viajan en la query string de Finnegans.
+    const urlSafe = url.replace(
+      /(client_secret|ACCESS_TOKEN)=[^&]+/gi,
+      '$1=[REDACTED]',
+    );
+    this.logger.debug(`${method} ${urlSafe}`);
     const response = await fetch(url, options);
 
     if (!response.ok) {
@@ -83,7 +98,9 @@ export class FinnegansRealService extends IFinnegansService {
   async getOrdenesDePageFromERP(): Promise<any[]> {
     try {
       const data = await this.apiGet<any>('/api/ordenDePago');
-      const ordenes = Array.isArray(data) ? data : (data.items || data.data || []);
+      const ordenes = Array.isArray(data)
+        ? data
+        : data.items || data.data || [];
       return ordenes.map((op: any) => this.mapOrdenPago(op));
     } catch (error) {
       this.logger.error(`Error fetching ordenes de pago: ${error.message}`);
@@ -106,12 +123,17 @@ export class FinnegansRealService extends IFinnegansService {
       finnegansId: raw.Id || raw.Codigo || raw.ExternalId || raw.id,
       numero: raw.Numero || raw.NumeroCompleto || raw.numero || '',
       fecha: raw.Fecha || raw.FechaEmision || raw.fecha,
-      montoTotal: raw.Total || raw.ImporteTotal || raw.MontoTotal || raw.montoTotal || 0,
+      montoTotal:
+        raw.Total || raw.ImporteTotal || raw.MontoTotal || raw.montoTotal || 0,
       moneda: raw.Moneda?.Codigo || raw.moneda || 'ARS',
-      empresaCuit: raw.Proveedor?.IdentificacionTributaria?.Numero
-                || raw.Proveedor?.CUIT
-                || raw.empresaCuit || '',
-      facturas: (raw.Items || raw.Comprobantes || raw.facturas || []).map((f: any) => this.mapFactura(f, raw)),
+      empresaCuit:
+        raw.Proveedor?.IdentificacionTributaria?.Numero ||
+        raw.Proveedor?.CUIT ||
+        raw.empresaCuit ||
+        '',
+      facturas: (raw.Items || raw.Comprobantes || raw.facturas || []).map(
+        (f: any) => this.mapFactura(f, raw),
+      ),
     };
   }
 
@@ -120,7 +142,9 @@ export class FinnegansRealService extends IFinnegansService {
   async getFacturasFromERP(): Promise<any[]> {
     try {
       const data = await this.apiGet<any>('/api/facturaCompra');
-      const facturas = Array.isArray(data) ? data : (data.items || data.data || []);
+      const facturas = Array.isArray(data)
+        ? data
+        : data.items || data.data || [];
       return facturas.map((f: any) => this.mapFactura(f));
     } catch (error) {
       this.logger.error(`Error fetching facturas: ${error.message}`);
@@ -144,31 +168,46 @@ export class FinnegansRealService extends IFinnegansService {
     const tipo = this.mapTipoFactura(tipoRaw);
 
     return {
-      finnegansId: raw.Id || raw.Codigo || raw.ExternalId || raw.finnegansId || raw.id,
+      finnegansId:
+        raw.Id || raw.Codigo || raw.ExternalId || raw.finnegansId || raw.id,
       numero: raw.Numero || raw.NumeroCompleto || raw.numero || '',
       tipo,
       fecha: raw.Fecha || raw.FechaEmision || raw.fecha,
       fechaVencimiento: raw.FechaVencimiento || raw.fechaVencimiento,
-      montoNeto: raw.SubTotal || raw.Neto || raw.ImporteNeto || raw.montoNeto || 0,
+      montoNeto:
+        raw.SubTotal || raw.Neto || raw.ImporteNeto || raw.montoNeto || 0,
       montoIva: raw.IVA || raw.ImporteIVA || raw.montoIva || 0,
       montoTotal: raw.Total || raw.ImporteTotal || raw.montoTotal || 0,
       moneda: raw.Moneda?.Codigo || raw.moneda || 'ARS',
-      empresaCuit: raw.Proveedor?.IdentificacionTributaria?.Numero
-                || parentOrden?.Proveedor?.IdentificacionTributaria?.Numero
-                || raw.empresaCuit || parentOrden?.empresaCuit || '',
-      empresaClienteCuit: raw.Cliente?.IdentificacionTributaria?.Numero
-                       || raw.empresaClienteCuit || '',
+      empresaCuit:
+        raw.Proveedor?.IdentificacionTributaria?.Numero ||
+        parentOrden?.Proveedor?.IdentificacionTributaria?.Numero ||
+        raw.empresaCuit ||
+        parentOrden?.empresaCuit ||
+        '',
+      empresaClienteCuit:
+        raw.Cliente?.IdentificacionTributaria?.Numero ||
+        raw.empresaClienteCuit ||
+        '',
     };
   }
 
   private mapTipoFactura(tipo: string): string {
     const t = tipo.toUpperCase().replace(/\s+/g, '');
-    if (t.includes('NC') || t.includes('NOTACREDITO') || t.includes('NOTA_CREDITO')) {
+    if (
+      t.includes('NC') ||
+      t.includes('NOTACREDITO') ||
+      t.includes('NOTA_CREDITO')
+    ) {
       if (t.includes('B')) return 'NC-B';
       if (t.includes('C')) return 'NC-C';
       return 'NC-A';
     }
-    if (t.includes('ND') || t.includes('NOTADEBITO') || t.includes('NOTA_DEBITO')) {
+    if (
+      t.includes('ND') ||
+      t.includes('NOTADEBITO') ||
+      t.includes('NOTA_DEBITO')
+    ) {
       if (t.includes('B')) return 'ND-B';
       if (t.includes('C')) return 'ND-C';
       return 'ND-A';
@@ -203,7 +242,9 @@ export class FinnegansRealService extends IFinnegansService {
         finnegansId: result.id || result.Id || result.Codigo || company.cuit,
       };
     } catch (error) {
-      this.logger.error(`Error creating company in Finnegans: ${error.message}`);
+      this.logger.error(
+        `Error creating company in Finnegans: ${error.message}`,
+      );
       // Fallback: use CUIT as finnegansId so the flow doesn't break
       return { ...company, finnegansId: `LOCAL-${company.cuit}` };
     }
@@ -222,7 +263,9 @@ export class FinnegansRealService extends IFinnegansService {
         condicionIva: data.CategoriaIVA?.Nombre || data.CondicionIva || '',
       };
     } catch (error) {
-      this.logger.error(`Error fetching company ${id} from Finnegans: ${error.message}`);
+      this.logger.error(
+        `Error fetching company ${id} from Finnegans: ${error.message}`,
+      );
       return null;
     }
   }

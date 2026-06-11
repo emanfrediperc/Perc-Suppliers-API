@@ -17,7 +17,12 @@ async function bootstrap() {
     app.get(ConfigService).get<number>('forensics.trustProxyHops') ?? 2;
   app.set('trust proxy', trustProxyHops);
 
-  app.use(helmet());
+  // HSTS explícito: fuerza HTTPS por 1 año (solo surte efecto sobre TLS; inocuo en dev HTTP).
+  app.use(
+    helmet({
+      hsts: { maxAge: 31536000, includeSubDomains: true, preload: true },
+    }),
+  );
 
   app.setGlobalPrefix('api/v1');
 
