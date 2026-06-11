@@ -197,7 +197,37 @@ export class AuthService {
     ) {
       throw new UnauthorizedException();
     }
-    const { codigosRecuperacion } = await this.confirmarTotp(userId, codigo);
+    // Lockout también en el enrolamiento (simetría con loginVerificarTotp).
+    const ahora = new Date();
+    if (userPrevio.lockUntil && userPrevio.lockUntil > ahora) {
+      throw new UnauthorizedException(
+        'Cuenta bloqueada por intentos fallidos. Intentá de nuevo en unos minutos.',
+      );
+    }
+    let codigosRecuperacion: string[];
+    try {
+      ({ codigosRecuperacion } = await this.confirmarTotp(userId, codigo));
+    } catch (e) {
+      // Brute-force guard del código de enrolamiento. updateOne atómico para no
+      // pisar lo que confirmarTotp pudiera haber escrito.
+      const intentos = (userPrevio.failedLoginAttempts || 0) + 1;
+      const set =
+        intentos >= 5
+          ? {
+              failedLoginAttempts: 0,
+              lockUntil: new Date(ahora.getTime() + 15 * 60 * 1000),
+            }
+          : { failedLoginAttempts: intentos };
+      await this.userModel.updateOne({ _id: userId }, { $set: set });
+      throw e;
+    }
+    // Éxito: limpiar contador sin pisar los campos TOTP que confirmarTotp guardó.
+    if (userPrevio.failedLoginAttempts || userPrevio.lockUntil) {
+      await this.userModel.updateOne(
+        { _id: userId },
+        { $set: { failedLoginAttempts: 0, lockUntil: null } },
+      );
+    }
     const user = await this.userModel.findById(userId);
     if (!user) throw new UnauthorizedException();
     return { ...this.generateAuthResponse(user), codigosRecuperacion };

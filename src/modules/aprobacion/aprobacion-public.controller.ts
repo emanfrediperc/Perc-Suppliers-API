@@ -159,7 +159,12 @@ export class AprobacionPublicController {
     }
     const ip = extraerIp(req);
     const userAgent = extraerUserAgent(req);
-    return this.service.iniciarStepUp(dto.token, ip, userAgent);
+    try {
+      return await this.service.iniciarStepUp(dto.token, ip, userAgent);
+    } catch {
+      // Error genérico — no filtrar si el token/aprobación existen (igual que decidir-via-token).
+      throw new UnauthorizedException('Token inválido o expirado');
+    }
   }
 
   @Post('step-up/verificar')

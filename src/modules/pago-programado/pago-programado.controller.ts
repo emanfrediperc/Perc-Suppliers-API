@@ -64,7 +64,8 @@ export class PagoProgramadoController {
     @Res() res: express.Response,
   ) {
     const result = await this.service.findAll({
-      estado,
+      // String() evita NoSQL injection también en el export (?estado[$ne]=...).
+      estado: estado != null ? String(estado) : undefined,
       page: 1,
       limit: 10000,
     });
