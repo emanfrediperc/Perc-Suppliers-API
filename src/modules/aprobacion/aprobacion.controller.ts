@@ -1,5 +1,21 @@
-import { Controller, Get, Patch, Post, Param, Body, Query, Res, UseGuards } from '@nestjs/common';
-import { ApiBearerAuth, ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
+import {
+  Controller,
+  Get,
+  Patch,
+  Post,
+  Param,
+  Body,
+  Query,
+  Req,
+  Res,
+  UseGuards,
+} from '@nestjs/common';
+import {
+  ApiBearerAuth,
+  ApiOperation,
+  ApiResponse,
+  ApiTags,
+} from '@nestjs/swagger';
 import * as express from 'express';
 import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../../auth/guards/roles.guard';
@@ -7,7 +23,15 @@ import { Roles } from '../../auth/decorators/roles.decorator';
 import { CurrentUser } from '../../auth/decorators/current-user.decorator';
 import { AprobacionService } from './aprobacion.service';
 import { DecidirAprobacionDto } from './dto/decidir-aprobacion.dto';
-import { ExportService, ExportColumn } from '../../common/services/export.service';
+import {
+  ExportService,
+  ExportColumn,
+} from '../../common/services/export.service';
+import { GeoService } from '../../common/services/geo.service';
+import {
+  extraerIp,
+  extraerUserAgent,
+} from '../../common/utils/request-forense.util';
 
 @ApiTags('Aprobaciones')
 @ApiBearerAuth()
@@ -17,6 +41,7 @@ export class AprobacionController {
   constructor(
     private readonly service: AprobacionService,
     private readonly exportService: ExportService,
+    private readonly geoService: GeoService,
   ) {}
 
   @Get('pendientes')
@@ -33,7 +58,10 @@ export class AprobacionController {
 
   @Get('export')
   @Roles('admin', 'tesoreria', 'aprobador')
-  async export(@Query('formato') formato: string, @Res() res: express.Response) {
+  async export(
+    @Query('formato') formato: string,
+    @Res() res: express.Response,
+  ) {
     const data = await this.service.findAll();
     const columns: ExportColumn[] = [
       { header: 'Fecha Solicitud', key: 'createdAt', type: 'datetime' },
@@ -41,8 +69,17 @@ export class AprobacionController {
       { header: 'Entidad', key: 'entidad', type: 'text', width: 16 },
       { header: 'Descripción', key: 'descripcion', type: 'text', width: 40 },
       { header: 'Monto', key: 'monto', type: 'currency' },
-      { header: 'Solicitado Por', key: 'createdByEmail', type: 'text', width: 28 },
-      { header: 'Aprobaciones Requeridas', key: 'aprobacionesRequeridas', type: 'number' },
+      {
+        header: 'Solicitado Por',
+        key: 'createdByEmail',
+        type: 'text',
+        width: 28,
+      },
+      {
+        header: 'Aprobaciones Requeridas',
+        key: 'aprobacionesRequeridas',
+        type: 'number',
+      },
       {
         header: 'Aprobaciones Recibidas',
         key: 'aprobaciones',
@@ -53,35 +90,77 @@ export class AprobacionController {
     ];
     const totalsRow = {
       createdAt: 'TOTAL',
-      monto: (data as any[]).reduce((s: number, a: any) => s + (a.monto || 0), 0),
+      monto: (data as any[]).reduce(
+        (s: number, a: any) => s + (a.monto || 0),
+        0,
+      ),
     };
     if (formato === 'csv') {
       const csv = await this.exportService.generateCsv(data as any[], columns);
       res.setHeader('Content-Type', 'text/csv; charset=utf-8');
-      res.setHeader('Content-Disposition', 'attachment; filename=aprobaciones.csv');
+      res.setHeader(
+        'Content-Disposition',
+        'attachment; filename=aprobaciones.csv',
+      );
       res.send(csv);
     } else {
-      const buffer = await this.exportService.generateExcel(data as any[], columns, 'Aprobaciones', {
-        title: 'Aprobaciones', totalsRow,
-      });
-      res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-      res.setHeader('Content-Disposition', 'attachment; filename=aprobaciones.xlsx');
+      const buffer = await this.exportService.generateExcel(
+        data as any[],
+        columns,
+        'Aprobaciones',
+        {
+          title: 'Aprobaciones',
+          totalsRow,
+        },
+      );
+      res.setHeader(
+        'Content-Type',
+        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      );
+      res.setHeader(
+        'Content-Disposition',
+        'attachment; filename=aprobaciones.xlsx',
+      );
       res.send(buffer);
     }
   }
 
   @Get()
+  @Roles('admin', 'aprobador', 'tesoreria', 'operador', 'consulta')
   findAll() {
     return this.service.findAll();
   }
 
   @Get(':id')
+  @Roles('admin', 'aprobador', 'tesoreria', 'operador', 'consulta')
   findOne(@Param('id') id: string) {
     return this.service.findOne(id);
   }
 
+  /**
+   * Verifica la integridad de la cadena de hash del historial de la aprobación
+   * (tamper-evidence + sello RFC 3161). Devuelve { valid, brokenAt, total, conTsa }.
+   */
+  @Get(':id/verificar-integridad')
+  @Roles('admin', 'aprobador', 'tesoreria', 'consulta')
+  @ApiOperation({
+    summary: 'Verificar integridad del historial de la aprobación',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Resultado de la verificación de la cadena de hash',
+  })
+  @ApiResponse({ status: 404, description: 'Aprobación no encontrada' })
+  verificarIntegridad(@Param('id') id: string) {
+    return this.service.verificarIntegridad(id);
+  }
+
   @Get('entidad/:entidad/:entidadId')
-  findByEntity(@Param('entidad') entidad: string, @Param('entidadId') entidadId: string) {
+  @Roles('admin', 'aprobador', 'tesoreria', 'operador', 'consulta')
+  findByEntity(
+    @Param('entidad') entidad: string,
+    @Param('entidadId') entidadId: string,
+  ) {
     return this.service.findByEntity(entidad, entidadId);
   }
 
@@ -99,9 +178,19 @@ export class AprobacionController {
       'La aprobación debe estar en estado `rechazada` y tener `reenviosRestantes > 0`. ' +
       'El ciclo anterior se snapshotea en `intentos[]`; se emiten nuevos tokens y se envían nuevos emails.',
   })
-  @ApiResponse({ status: 200, description: 'Aprobación reenviada — nuevo ciclo pendiente' })
-  @ApiResponse({ status: 400, description: 'Estado inválido, sin reenvíos restantes, o sin aprobadores activos' })
-  @ApiResponse({ status: 403, description: 'El usuario no es el creador original' })
+  @ApiResponse({
+    status: 200,
+    description: 'Aprobación reenviada — nuevo ciclo pendiente',
+  })
+  @ApiResponse({
+    status: 400,
+    description:
+      'Estado inválido, sin reenvíos restantes, o sin aprobadores activos',
+  })
+  @ApiResponse({
+    status: 403,
+    description: 'El usuario no es el creador original',
+  })
   @ApiResponse({ status: 404, description: 'Aprobación no encontrada' })
   reenviar(@Param('id') id: string, @CurrentUser() user: any) {
     return this.service.reenviar(id, {
@@ -118,8 +207,19 @@ export class AprobacionController {
     @Param('id') id: string,
     @Body() dto: DecidirAprobacionDto,
     @CurrentUser() user: any,
+    @Req() req: express.Request,
   ) {
-    return this.service.decidir(id, { userId: user.userId, email: user.email }, dto.decision, dto.comentario);
+    return this.service.decidir(
+      id,
+      { userId: user.userId, email: user.email },
+      dto.decision,
+      dto.comentario,
+      {
+        ip: extraerIp(req),
+        userAgent: extraerUserAgent(req),
+        geo: this.geoService.resolver(req),
+      },
+    );
   }
 
   /**
@@ -130,16 +230,32 @@ export class AprobacionController {
   @Post(':id/reenviar-mail')
   @Roles('admin', 'aprobador', 'tesoreria')
   @ApiOperation({
-    summary: 'Reenviar el mail magic-link a los aprobadores (aprobación pendiente)',
+    summary:
+      'Reenviar el mail magic-link a los aprobadores (aprobación pendiente)',
     description:
       'Invalida los tokens pendientes de cada aprobador activo, emite nuevos tokens y ' +
       'reenvía los emails. Solo funciona si la aprobación está en estado pendiente y si ' +
       'ENABLE_MAGIC_LINK=true.',
   })
-  @ApiResponse({ status: 200, description: 'Mail reenviado', schema: { example: { mensaje: 'Mail reenviado a los aprobadores', destinatarios: 2 } } })
-  @ApiResponse({ status: 400, description: 'Estado inválido, sin aprobadores, o flag deshabilitado' })
+  @ApiResponse({
+    status: 200,
+    description: 'Mail reenviado',
+    schema: {
+      example: {
+        mensaje: 'Mail reenviado a los aprobadores',
+        destinatarios: 2,
+      },
+    },
+  })
+  @ApiResponse({
+    status: 400,
+    description: 'Estado inválido, sin aprobadores, o flag deshabilitado',
+  })
   @ApiResponse({ status: 404, description: 'Aprobación no encontrada' })
   reenviarMail(@Param('id') id: string, @CurrentUser() user: any) {
-    return this.service.resendMagicLinks(id, { userId: user.userId, email: user.email });
+    return this.service.resendMagicLinks(id, {
+      userId: user.userId,
+      email: user.email,
+    });
   }
 }

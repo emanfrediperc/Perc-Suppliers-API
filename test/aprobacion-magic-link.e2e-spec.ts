@@ -27,6 +27,9 @@ import request from 'supertest';
 import { AppModule } from '../src/app.module';
 import { EmailService } from '../src/integrations/email/email.service';
 import { HttpExceptionFilter } from '../src/common/filters/http-exception.filter';
+import { EmpresaKind } from '../src/modules/prestamos/enums/empresa-kind.enum';
+import { getModelToken } from '@nestjs/mongoose';
+import { Model } from 'mongoose';
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -179,12 +182,12 @@ async function setupContext(prefix: string): Promise<AppContext> {
   ]);
 
   const clienteEmpresas: Array<{ id: string; kind: string }> = [
-    ...(clientesRes.body as Array<{ id: string; kind: string }>).filter((e) => e.kind === 'CLIENTE'),
-    ...(proveedorasRes.body as Array<{ id: string; kind: string }>).filter((e) => e.kind === 'CLIENTE'),
+    ...(clientesRes.body as Array<{ id: string; kind: string }>).filter((e) => e.kind === EmpresaKind.CLIENTE),
+    ...(proveedorasRes.body as Array<{ id: string; kind: string }>).filter((e) => e.kind === EmpresaKind.CLIENTE),
   ];
   const proveedoraEmpresas: Array<{ id: string; kind: string }> = [
-    ...(clientesRes.body as Array<{ id: string; kind: string }>).filter((e) => e.kind === 'PROVEEDORA'),
-    ...(proveedorasRes.body as Array<{ id: string; kind: string }>).filter((e) => e.kind === 'PROVEEDORA'),
+    ...(clientesRes.body as Array<{ id: string; kind: string }>).filter((e) => e.kind === EmpresaKind.PROVEEDORA),
+    ...(proveedorasRes.body as Array<{ id: string; kind: string }>).filter((e) => e.kind === EmpresaKind.PROVEEDORA),
   ];
 
   if (clienteEmpresas.length < 1 || proveedoraEmpresas.length < 1) {
@@ -215,10 +218,12 @@ async function crearPrestamoConAprobacion(ctx: AppContext): Promise<{
   ctx.emailSpy.mockClear();
 
   const prestamoPayload = {
-    lender: { empresaId: ctx.lenderId, empresaKind: 'CLIENTE' },
-    borrower: { empresaId: ctx.borrowerId, empresaKind: 'PROVEEDORA' },
+    lender: { empresaId: ctx.lenderId, empresaKind: EmpresaKind.CLIENTE },
+    borrower: { empresaId: ctx.borrowerId, empresaKind: EmpresaKind.PROVEEDORA },
     currency: 'ARS',
-    capital: 500000,
+    // 300k cae en el rango de 1 aprobación requerida ([100k,500k)); 500k pide 2 y
+    // dejaría la solicitud "pendiente" tras una sola decisión.
+    capital: 300000,
     rate: 45,
     startDate: '2026-04-21',
     dueDate: '2026-07-21',
@@ -439,15 +444,15 @@ describe('T025 — No aprobador activo → 400 al crear; flag off → 503', () =
       ...cliRes.body,
       ...provRes.body,
     ];
-    const lenderId = allEmpresas.find((e) => e.kind === 'CLIENTE')?.id;
-    const borrowerId = allEmpresas.find((e) => e.kind === 'PROVEEDORA')?.id;
+    const lenderId = allEmpresas.find((e) => e.kind === EmpresaKind.CLIENTE)?.id;
+    const borrowerId = allEmpresas.find((e) => e.kind === EmpresaKind.PROVEEDORA)?.id;
 
     const res = await request(appOn.getHttpServer())
       .post('/api/v1/prestamos')
       .set('Authorization', `Bearer ${tesoreriaToken}`)
       .send({
-        lender: { empresaId: lenderId, empresaKind: 'CLIENTE' },
-        borrower: { empresaId: borrowerId, empresaKind: 'PROVEEDORA' },
+        lender: { empresaId: lenderId, empresaKind: EmpresaKind.CLIENTE },
+        borrower: { empresaId: borrowerId, empresaKind: EmpresaKind.PROVEEDORA },
         currency: 'ARS',
         capital: 100000,
         rate: 30,

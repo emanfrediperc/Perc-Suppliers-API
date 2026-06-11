@@ -23,14 +23,19 @@ export class HashChainService {
    */
   computeHash(prevHash: string, entry: HistorialEntryLike): string {
     const payload = this.canonical(entry);
-    return createHash('sha256').update(prevHash + payload).digest('hex');
+    return createHash('sha256')
+      .update(prevHash + payload)
+      .digest('hex');
   }
 
   /**
    * Verifica integridad de la cadena. Devuelve índice de la primera entry rota,
    * o null si toda la cadena está consistente.
    */
-  verifyChain(historial: HistorialEntryLike[]): { valid: boolean; brokenAt: number | null } {
+  verifyChain(historial: HistorialEntryLike[]): {
+    valid: boolean;
+    brokenAt: number | null;
+  } {
     let prev = '';
     for (let i = 0; i < historial.length; i++) {
       const entry = historial[i];
@@ -48,8 +53,12 @@ export class HashChainService {
       motivo: entry.motivo ?? null,
       estadoAnterior: entry.estadoAnterior ?? null,
       estadoNuevo: entry.estadoNuevo ?? null,
-      fechaAnterior: entry.fechaAnterior ? new Date(entry.fechaAnterior).toISOString() : null,
-      fechaNueva: entry.fechaNueva ? new Date(entry.fechaNueva).toISOString() : null,
+      fechaAnterior: entry.fechaAnterior
+        ? new Date(entry.fechaAnterior).toISOString()
+        : null,
+      fechaNueva: entry.fechaNueva
+        ? new Date(entry.fechaNueva).toISOString()
+        : null,
       fecha: new Date(entry.fecha).toISOString(),
     };
     const sorted = Object.keys(stripped)

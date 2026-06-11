@@ -1,9 +1,15 @@
 import { Module } from '@nestjs/common';
 import { MongooseModule } from '@nestjs/mongoose';
-import { SolicitudPago, SolicitudPagoSchema } from './schemas/solicitud-pago.schema';
+import {
+  SolicitudPago,
+  SolicitudPagoSchema,
+} from './schemas/solicitud-pago.schema';
 import { Factura, FacturaSchema } from '../factura/schemas/factura.schema';
 import { Pago, PagoSchema } from '../pago/schemas/pago.schema';
-import { OrdenPago, OrdenPagoSchema } from '../orden-pago/schemas/orden-pago.schema';
+import {
+  OrdenPago,
+  OrdenPagoSchema,
+} from '../orden-pago/schemas/orden-pago.schema';
 import { Convenio, ConvenioSchema } from '../convenio/schemas/convenio.schema';
 import { User, UserSchema } from '../../auth/schemas/user.schema';
 import { SolicitudPagoService } from './solicitud-pago.service';
@@ -12,14 +18,14 @@ import { StorageModule } from '../../integrations/storage/storage.module';
 import { EmailModule } from '../../integrations/email/email.module';
 import { PagoCalculatorService } from '../../common/services/pago-calculator.service';
 import { ExportService } from '../../common/services/export.service';
-import { HashChainService } from './hash-chain.service';
-import { TsaClient } from './tsa.client';
+import { CryptoModule } from '../../common/crypto.module';
 import { SolicitudPagoCronService } from './solicitud-pago-cron.service';
 
 @Module({
   imports: [
     StorageModule,
     EmailModule,
+    CryptoModule,
     MongooseModule.forFeature([
       { name: SolicitudPago.name, schema: SolicitudPagoSchema },
       { name: Factura.name, schema: FacturaSchema },
@@ -30,7 +36,12 @@ import { SolicitudPagoCronService } from './solicitud-pago-cron.service';
     ]),
   ],
   controllers: [SolicitudPagoController],
-  providers: [SolicitudPagoService, PagoCalculatorService, ExportService, HashChainService, TsaClient, SolicitudPagoCronService],
+  providers: [
+    SolicitudPagoService,
+    PagoCalculatorService,
+    ExportService,
+    SolicitudPagoCronService,
+  ],
   exports: [SolicitudPagoService],
 })
 export class SolicitudPagoModule {}

@@ -1,6 +1,33 @@
-import { Injectable, NestInterceptor, ExecutionContext, CallHandler, Logger } from '@nestjs/common';
+import {
+  Injectable,
+  NestInterceptor,
+  ExecutionContext,
+  CallHandler,
+  Logger,
+} from '@nestjs/common';
 import { Observable, tap } from 'rxjs';
 import { AuditLogService } from './audit-log.service';
+import {
+  extraerIp,
+  extraerUserAgent,
+} from '../../common/utils/request-forense.util';
+
+// Claves cuyo valor NUNCA debe persistirse en el audit log (datos bancarios, credenciales, tokens).
+const CLAVES_SENSIBLES =
+  /password|secret|token|cbu|datosbancarios|codigo|totp|recuperacion|proof/i;
+
+/** Clona el body redactando recursivamente los valores de claves sensibles. */
+function redactarSensible(obj: any): any {
+  if (!obj || typeof obj !== 'object') return obj;
+  if (Array.isArray(obj)) return obj.map(redactarSensible) as unknown;
+  const out: Record<string, any> = {};
+  for (const [k, v] of Object.entries(obj as Record<string, any>)) {
+    if (CLAVES_SENSIBLES.test(k)) out[k] = '[REDACTED]';
+    else if (v && typeof v === 'object') out[k] = redactarSensible(v);
+    else out[k] = v;
+  }
+  return out;
+}
 
 const METHOD_ACTION_MAP: Record<string, string> = {
   POST: 'crear',
@@ -47,16 +74,24 @@ export class AuditLogInterceptor implements NestInterceptor {
       tap({
         next: (result) => {
           const resultId = result?._id?.toString() || result?.id || entidadId;
-          this.auditService.log({
-            usuario: user.userId,
-            usuarioEmail: user.email,
-            accion,
-            entidad,
-            entidadId: resultId,
-            cambios: method === 'PATCH' || method === 'PUT' ? request.body : undefined,
-            ip: request.ip,
-            descripcion: `${user.email} - ${accion} ${entidad}${resultId ? ' ' + resultId : ''}`,
-          }).catch((e) => this.logger.warn(`audit-log fallo: ${e?.message ?? e}`));
+          this.auditService
+            .log({
+              usuario: user.userId,
+              usuarioEmail: user.email,
+              accion,
+              entidad,
+              entidadId: resultId,
+              cambios:
+                method === 'PATCH' || method === 'PUT'
+                  ? redactarSensible(request.body)
+                  : undefined,
+              ip: extraerIp(request),
+              userAgent: extraerUserAgent(request),
+              descripcion: `${user.email} - ${accion} ${entidad}${resultId ? ' ' + resultId : ''}`,
+            })
+            .catch((e) =>
+              this.logger.warn(`audit-log fallo: ${e?.message ?? e}`),
+            );
         },
       }),
     );

@@ -5,6 +5,7 @@ import {
   Body,
   Param,
   Req,
+  HttpCode,
   ServiceUnavailableException,
   UnauthorizedException,
 } from '@nestjs/common';
@@ -14,6 +15,13 @@ import type { Request } from 'express';
 import { ConfigService } from '@nestjs/config';
 import { AprobacionService } from './aprobacion.service';
 import { DecidirViaTokenDto } from './dto/decidir-via-token.dto';
+import { IniciarStepUpDto } from './dto/iniciar-step-up.dto';
+import { VerificarStepUpDto } from './dto/verificar-step-up.dto';
+import { GeoService } from '../../common/services/geo.service';
+import {
+  extraerIp,
+  extraerUserAgent,
+} from '../../common/utils/request-forense.util';
 
 /**
  * Controlador público (sin JWT) para el flujo de magic-link.
@@ -27,12 +35,14 @@ export class AprobacionPublicController {
   constructor(
     private readonly service: AprobacionService,
     private readonly configService: ConfigService,
+    private readonly geoService: GeoService,
   ) {}
 
   @Get('contexto-token/:token')
   @Throttle({ default: { ttl: 60_000, limit: 10 } })
   @ApiOperation({
-    summary: 'Obtener contexto de una aprobación desde un magic-link token (público, read-only)',
+    summary:
+      'Obtener contexto de una aprobación desde un magic-link token (público, read-only)',
     description:
       'Valida el token y devuelve el contexto necesario para mostrar la página de confirmación en el frontend. ' +
       'NO modifica ningún estado — es completamente idempotente. ' +
@@ -55,7 +65,10 @@ export class AprobacionPublicController {
       },
     },
   })
-  @ApiResponse({ status: 401, description: 'Token inválido o expirado (mensaje genérico)' })
+  @ApiResponse({
+    status: 401,
+    description: 'Token inválido o expirado (mensaje genérico)',
+  })
   @ApiResponse({ status: 429, description: 'Rate limit excedido' })
   @ApiResponse({ status: 503, description: 'Funcionalidad deshabilitada' })
   async contextoToken(@Param('token') token: string) {
@@ -71,6 +84,8 @@ export class AprobacionPublicController {
   }
 
   @Post('decidir-via-token')
+  // Decide sobre una aprobación existente (no crea recurso) → 200, igual que el gemelo PATCH :id/decidir.
+  @HttpCode(200)
   @Throttle({ default: { ttl: 60_000, limit: 10 } })
   @ApiOperation({
     summary: 'Decidir una aprobación vía magic-link token (público)',
@@ -82,23 +97,30 @@ export class AprobacionPublicController {
   @ApiResponse({
     status: 200,
     description: 'Decisión registrada',
-    schema: { example: { mensaje: 'Decisión registrada', estadoAprobacion: 'aprobada' } },
+    schema: {
+      example: { mensaje: 'Decisión registrada', estadoAprobacion: 'aprobada' },
+    },
   })
   @ApiResponse({ status: 400, description: 'Body inválido (class-validator)' })
-  @ApiResponse({ status: 401, description: 'Token inválido o expirado (mensaje genérico, no filtra si existe)' })
+  @ApiResponse({
+    status: 401,
+    description:
+      'Token inválido o expirado (mensaje genérico, no filtra si existe)',
+  })
   @ApiResponse({ status: 429, description: 'Rate limit excedido' })
-  @ApiResponse({ status: 503, description: 'Funcionalidad deshabilitada (ENABLE_MAGIC_LINK=false)' })
-  async decidirViaToken(
-    @Body() dto: DecidirViaTokenDto,
-    @Req() req: Request,
-  ) {
+  @ApiResponse({
+    status: 503,
+    description: 'Funcionalidad deshabilitada (ENABLE_MAGIC_LINK=false)',
+  })
+  async decidirViaToken(@Body() dto: DecidirViaTokenDto, @Req() req: Request) {
     // Feature flag guard — 503 si magic-link está deshabilitado
     if (this.configService.get<boolean>('magicLink.enabled') !== true) {
       throw new ServiceUnavailableException('Funcionalidad deshabilitada');
     }
 
-    const ip = req.ip ?? 'unknown';
-    const userAgent = (req.headers['user-agent'] as string) ?? 'unknown';
+    const ip = extraerIp(req);
+    const userAgent = extraerUserAgent(req);
+    const geo = this.geoService.resolver(req);
 
     try {
       const result = await this.service.decidirViaToken(
@@ -107,11 +129,74 @@ export class AprobacionPublicController {
         dto.comentario,
         ip,
         userAgent,
+        geo,
+        dto.stepUpProof,
+        dto.desafioId,
       );
-      return { mensaje: 'Decisión registrada', estadoAprobacion: result.estado };
+      return {
+        mensaje: 'Decisión registrada',
+        estadoAprobacion: result.estado,
+      };
     } catch {
       // Error genérico — nunca filtrar si el token existió o no
       throw new UnauthorizedException('Token inválido o expirado');
     }
+  }
+
+  @Post('step-up/iniciar')
+  @Throttle({ default: { ttl: 60_000, limit: 10 } })
+  @ApiOperation({
+    summary:
+      'Iniciar desafío de segundo factor (step-up) para una aprobación de monto alto',
+  })
+  @ApiResponse({ status: 201, description: 'Desafío creado' })
+  @ApiResponse({
+    status: 400,
+    description: 'La aprobación no requiere segundo factor',
+  })
+  @ApiResponse({ status: 401, description: 'Token inválido o expirado' })
+  @ApiResponse({ status: 503, description: 'Funcionalidad deshabilitada' })
+  async iniciarStepUp(@Body() dto: IniciarStepUpDto, @Req() req: Request) {
+    if (this.configService.get<boolean>('magicLink.enabled') !== true) {
+      throw new ServiceUnavailableException('Funcionalidad deshabilitada');
+    }
+    const ip = extraerIp(req);
+    const userAgent = extraerUserAgent(req);
+    try {
+      return await this.service.iniciarStepUp(dto.token, ip, userAgent);
+    } catch {
+      // Error genérico — no filtrar si el token/aprobación existen (igual que decidir-via-token).
+      throw new UnauthorizedException('Token inválido o expirado');
+    }
+  }
+
+  @Post('step-up/verificar')
+  @Throttle({ default: { ttl: 60_000, limit: 5 } })
+  @ApiOperation({
+    summary: 'Verificar el segundo factor y obtener el proof para decidir',
+  })
+  @ApiResponse({
+    status: 201,
+    description: 'Factor verificado; devuelve stepUpProof',
+  })
+  @ApiResponse({
+    status: 401,
+    description: 'Factor incorrecto, bloqueado, o token/desafío inválido',
+  })
+  @ApiResponse({ status: 429, description: 'Rate limit excedido' })
+  @ApiResponse({ status: 503, description: 'Funcionalidad deshabilitada' })
+  async verificarStepUp(@Body() dto: VerificarStepUpDto, @Req() req: Request) {
+    if (this.configService.get<boolean>('magicLink.enabled') !== true) {
+      throw new ServiceUnavailableException('Funcionalidad deshabilitada');
+    }
+    const ip = extraerIp(req);
+    const userAgent = extraerUserAgent(req);
+    return this.service.verificarStepUp(
+      dto.token,
+      dto.desafioId,
+      dto.secreto,
+      ip,
+      userAgent,
+    );
   }
 }

@@ -11,7 +11,11 @@
 
 import { Test, TestingModule } from '@nestjs/testing';
 import { getModelToken } from '@nestjs/mongoose';
-import { ForbiddenException, BadRequestException, NotFoundException } from '@nestjs/common';
+import {
+  ForbiddenException,
+  BadRequestException,
+  NotFoundException,
+} from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { ConfigService } from '@nestjs/config';
 
@@ -21,7 +25,13 @@ import { NotificacionService } from '../notificacion/notificacion.service';
 import { ConfiguracionService } from '../configuracion/configuracion.service';
 import { AuditLogService } from '../audit-log/audit-log.service';
 import { EmailService } from '../../integrations/email/email.service';
-import { APROBACION_REENVIADA, APROBACION_RESUELTA } from './events/aprobacion-resuelta.event';
+import { HashChainService } from '../../common/services/hash-chain.service';
+import { TsaClient } from '../../common/services/tsa.client';
+import { StepUpService } from './step-up.service';
+import {
+  APROBACION_REENVIADA,
+  APROBACION_RESUELTA,
+} from './events/aprobacion-resuelta.event';
 
 // ─── Factories de mocks ───────────────────────────────────────────────────────
 
@@ -48,6 +58,7 @@ function buildAprobacionDoc(overrides: Partial<Record<string, any>> = {}) {
     ],
     aprobacionesRequeridas: 1,
     intentos: [],
+    historial: [],
     reenviosRestantes: 1,
     fechaReenvio: null,
     reenviadoPor: null,
@@ -80,10 +91,11 @@ describe('AprobacionService', () => {
     find: jest.Mock;
     create: jest.Mock;
     countDocuments: jest.Mock;
+    updateOne: jest.Mock;
   };
   let userModelMock: { find: jest.Mock };
   let notifServiceMock: { notifyUsersByRole: jest.Mock; create: jest.Mock };
-  let configServiceMock: { getApprovalConfig: jest.Mock };
+  let configServiceMock: { getApprovalConfig: jest.Mock; get: jest.Mock };
   let nestConfigServiceMock: { get: jest.Mock };
   let tokenServiceMock: {
     issueForAprobador: jest.Mock;
@@ -101,6 +113,9 @@ describe('AprobacionService', () => {
       find: jest.fn(),
       create: jest.fn(),
       countDocuments: jest.fn().mockResolvedValue(0),
+      updateOne: jest
+        .fn()
+        .mockReturnValue({ exec: jest.fn().mockResolvedValue(undefined) }),
     };
 
     userModelMock = {
@@ -116,6 +131,7 @@ describe('AprobacionService', () => {
       getApprovalConfig: jest.fn().mockResolvedValue({
         rules: [{ min: 0, max: undefined, aprobaciones: 1 }],
       }),
+      get: jest.fn().mockResolvedValue({}),
     };
 
     nestConfigServiceMock = {
@@ -158,6 +174,23 @@ describe('AprobacionService', () => {
         { provide: AuditLogService, useValue: auditLogServiceMock },
         { provide: EmailService, useValue: emailServiceMock },
         { provide: EventEmitter2, useValue: eventEmitterMock },
+        HashChainService,
+        {
+          provide: TsaClient,
+          useValue: {
+            timestamp: jest.fn().mockResolvedValue({ token: null }),
+            isEnabled: () => false,
+          },
+        },
+        {
+          provide: StepUpService,
+          useValue: {
+            aprobadorEnrolado: jest.fn().mockResolvedValue(false),
+            iniciarDesafio: jest.fn(),
+            verificarDesafio: jest.fn(),
+            validarYConsumirProof: jest.fn(),
+          },
+        },
       ],
     }).compile();
 
@@ -270,9 +303,11 @@ describe('AprobacionService', () => {
 
     it('invalida tokens del ciclo anterior ANTES de emitir nuevos', async () => {
       const callOrder: string[] = [];
-      tokenServiceMock.invalidateAllForAprobacion.mockImplementation(async () => {
-        callOrder.push('invalidate');
-      });
+      tokenServiceMock.invalidateAllForAprobacion.mockImplementation(
+        async () => {
+          callOrder.push('invalidate');
+        },
+      );
       tokenServiceMock.issueForAprobador.mockImplementation(async () => {
         callOrder.push('issue');
         return 'raw-token-nuevo';
@@ -283,7 +318,9 @@ describe('AprobacionService', () => {
         email: 'tesoreria@test.perc',
       });
 
-      expect(callOrder.indexOf('invalidate')).toBeLessThan(callOrder.indexOf('issue'));
+      expect(callOrder.indexOf('invalidate')).toBeLessThan(
+        callOrder.indexOf('issue'),
+      );
     });
 
     it('emite el token para cada aprobador activo', async () => {
@@ -334,37 +371,68 @@ describe('AprobacionService', () => {
 
   // ─── decidir() ─────────────────────────────────────────────────────────────
   describe('decidir()', () => {
-    const aprobador = { userId: 'user-aprobador-001', email: 'aprobador@test.perc', nombre: 'Aprobador' };
+    const aprobador = {
+      userId: 'user-aprobador-001',
+      email: 'aprobador@test.perc',
+      nombre: 'Aprobador',
+    };
 
     it('lanza NotFoundException si la aprobación no existe', async () => {
       aprobacionModelMock.findById.mockResolvedValue(null);
-      await expect(service.decidir('x', aprobador, 'aprobada')).rejects.toThrow(NotFoundException);
+      await expect(service.decidir('x', aprobador, 'aprobada')).rejects.toThrow(
+        NotFoundException,
+      );
     });
 
     it('lanza BadRequestException si ya fue resuelta (estado !== pendiente)', async () => {
-      aprobacionModelMock.findById.mockResolvedValue(buildAprobacionDoc({ estado: 'aprobada' }));
-      await expect(service.decidir('x', aprobador, 'aprobada')).rejects.toThrow(BadRequestException);
+      aprobacionModelMock.findById.mockResolvedValue(
+        buildAprobacionDoc({ estado: 'aprobada' }),
+      );
+      await expect(service.decidir('x', aprobador, 'aprobada')).rejects.toThrow(
+        BadRequestException,
+      );
     });
 
     it('lanza BadRequestException si el creador intenta aprobar su propia solicitud', async () => {
       aprobacionModelMock.findById.mockResolvedValue(
-        buildAprobacionDoc({ estado: 'pendiente', createdBy: aprobador.userId, aprobadores: [] }),
+        buildAprobacionDoc({
+          estado: 'pendiente',
+          createdBy: aprobador.userId,
+          aprobadores: [],
+        }),
       );
-      await expect(service.decidir('x', aprobador, 'aprobada')).rejects.toThrow(BadRequestException);
+      await expect(service.decidir('x', aprobador, 'aprobada')).rejects.toThrow(
+        BadRequestException,
+      );
     });
 
     it('lanza BadRequestException si el aprobador ya decidió', async () => {
       aprobacionModelMock.findById.mockResolvedValue(
-        buildAprobacionDoc({ estado: 'pendiente', createdBy: 'creator', aprobadores: [{ userId: aprobador.userId }] }),
+        buildAprobacionDoc({
+          estado: 'pendiente',
+          createdBy: 'creator',
+          aprobadores: [{ userId: aprobador.userId }],
+        }),
       );
-      await expect(service.decidir('x', aprobador, 'aprobada')).rejects.toThrow(BadRequestException);
+      await expect(service.decidir('x', aprobador, 'aprobada')).rejects.toThrow(
+        BadRequestException,
+      );
     });
 
     it('rechazada: marca estado rechazada, notifica al creador y emite evento', async () => {
-      const doc = buildAprobacionDoc({ estado: 'pendiente', createdBy: 'creator', aprobadores: [] });
+      const doc = buildAprobacionDoc({
+        estado: 'pendiente',
+        createdBy: 'creator',
+        aprobadores: [],
+      });
       aprobacionModelMock.findById.mockResolvedValue(doc);
 
-      await service.decidir('aprobacion-id-001', aprobador, 'rechazada', 'no conviene');
+      await service.decidir(
+        'aprobacion-id-001',
+        aprobador,
+        'rechazada',
+        'no conviene',
+      );
 
       expect(doc.estado).toBe('rechazada');
       expect(doc.aprobadores).toHaveLength(1);
@@ -376,7 +444,12 @@ describe('AprobacionService', () => {
     });
 
     it('aprobada (alcanza requeridas): marca aprobada, avisa a operadores y emite evento', async () => {
-      const doc = buildAprobacionDoc({ estado: 'pendiente', createdBy: 'creator', aprobadores: [], aprobacionesRequeridas: 1 });
+      const doc = buildAprobacionDoc({
+        estado: 'pendiente',
+        createdBy: 'creator',
+        aprobadores: [],
+        aprobacionesRequeridas: 1,
+      });
       aprobacionModelMock.findById.mockResolvedValue(doc);
 
       await service.decidir('aprobacion-id-001', aprobador, 'aprobada');
@@ -391,6 +464,81 @@ describe('AprobacionService', () => {
         APROBACION_RESUELTA,
         expect.objectContaining({ estado: 'aprobada' }),
       );
+    });
+  });
+
+  // ─── No-repudio: historial tamper-evident + forense ────────────────────────
+  describe('no-repudio del historial', () => {
+    const aprobador = {
+      userId: 'user-aprobador-001',
+      email: 'aprobador@test.perc',
+      nombre: 'Aprobador',
+    };
+
+    it('decidir encadena una entry de historial y persiste el forense en la decisión', async () => {
+      const doc = buildAprobacionDoc({
+        estado: 'pendiente',
+        createdBy: 'creator',
+        aprobadores: [],
+        historial: [],
+      });
+      aprobacionModelMock.findById.mockResolvedValue(doc);
+
+      await service.decidir('aprobacion-id-001', aprobador, 'aprobada', 'ok', {
+        ip: '203.0.113.9',
+        userAgent: 'jest',
+        tokenHash: 'abc123',
+      });
+
+      expect(doc.historial).toHaveLength(1);
+      expect(doc.historial[0]).toMatchObject({
+        accion: 'decidir',
+        usuario: aprobador.userId,
+        estadoNuevo: 'aprobada',
+        motivo: 'ok',
+      });
+      expect(doc.historial[0].hash).toMatch(/^[0-9a-f]{64}$/);
+      // El forense sobrevive al TTL del token porque vive en la decisión, no en el token.
+      expect(doc.aprobadores[0]).toMatchObject({
+        ip: '203.0.113.9',
+        userAgent: 'jest',
+        tokenHash: 'abc123',
+      });
+    });
+
+    it('verificarIntegridad valida una cadena consistente y detecta tampering', async () => {
+      const hc = new HashChainService();
+      const e1: Record<string, any> = {
+        accion: 'crear',
+        usuario: 'creator',
+        fecha: new Date('2026-04-01'),
+      };
+      e1.hash = hc.computeHash('', e1 as any);
+      const e2: Record<string, any> = {
+        accion: 'decidir',
+        usuario: aprobador.userId,
+        estadoNuevo: 'aprobada',
+        motivo: 'ok',
+        fecha: new Date('2026-04-02'),
+      };
+      e2.prevHash = e1.hash;
+      e2.hash = hc.computeHash(e1.hash as string, e2 as any);
+
+      aprobacionModelMock.findById.mockReturnValue({
+        lean: jest.fn().mockResolvedValue({ historial: [e1, e2] }),
+      });
+      const ok = await service.verificarIntegridad('aprobacion-id-001');
+      expect(ok).toMatchObject({ valid: true, brokenAt: null, total: 2 });
+
+      // Tamper: alterar la decisión sin recomputar el hash → la cadena se rompe en la entry 1.
+      aprobacionModelMock.findById.mockReturnValue({
+        lean: jest.fn().mockResolvedValue({
+          historial: [e1, { ...e2, estadoNuevo: 'rechazada' }],
+        }),
+      });
+      const bad = await service.verificarIntegridad('aprobacion-id-001');
+      expect(bad.valid).toBe(false);
+      expect(bad.brokenAt).toBe(1);
     });
   });
 });

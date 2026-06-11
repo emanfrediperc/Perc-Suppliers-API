@@ -20,8 +20,17 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
   }
 
   async validate(payload: any) {
+    // Los challenge tokens de login 2FA (scope 'pre-2fa') NO son access tokens:
+    // sólo sirven en los endpoints de login/totp, nunca como Bearer.
+    if (payload.scope === 'pre-2fa') {
+      throw new UnauthorizedException();
+    }
     const user = await this.userModel.findById(payload.sub);
-    if (!user || !user.activo || payload.tokenVersion !== (user.tokenVersion ?? 0)) {
+    if (
+      !user ||
+      !user.activo ||
+      payload.tokenVersion !== (user.tokenVersion ?? 0)
+    ) {
       throw new UnauthorizedException();
     }
     return { userId: payload.sub, email: payload.email, role: payload.role };

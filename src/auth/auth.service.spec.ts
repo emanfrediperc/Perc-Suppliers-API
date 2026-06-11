@@ -1,15 +1,30 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { getModelToken } from '@nestjs/mongoose';
 import { JwtService } from '@nestjs/jwt';
-import { ConflictException, UnauthorizedException } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
+import {
+  ConflictException,
+  UnauthorizedException,
+  BadRequestException,
+} from '@nestjs/common';
+import { authenticator } from 'otplib';
+import * as QRCode from 'qrcode';
 import { AuthService } from './auth.service';
 import { User } from './schemas/user.schema';
+import { cifrar } from '../common/utils/cifrado.util';
 import * as bcrypt from 'bcrypt';
+
+jest.mock('otplib');
+jest.mock('qrcode');
+
+/** Clave AES-256-GCM de test (64 hex = 32 bytes). */
+const TEST_ENC_KEY = 'a'.repeat(64);
 
 describe('AuthService', () => {
   let service: AuthService;
   let userModel: any;
   let jwtService: any;
+  let configService: any;
 
   const mockUser: any = {
     _id: '507f1f77bcf86cd799439011',
@@ -33,16 +48,30 @@ describe('AuthService', () => {
     mockUser.tokenVersion = 0;
     mockUser.mustChangePassword = false;
     mockUser.activo = true;
+    mockUser.totpHabilitado = false;
+    mockUser.totpSecretCifrado = null;
+    mockUser.totpSecretProvisional = null;
+    mockUser.codigosRecuperacion = [];
+    mockUser.stepUpIntentosFallidos = 0;
+    mockUser.stepUpBloqueadoHasta = null;
     mockUser.save = jest.fn().mockResolvedValue(mockUser);
 
     const mockUserModel = {
       findOne: jest.fn(),
       findById: jest.fn(),
       create: jest.fn(),
+      updateOne: jest.fn().mockResolvedValue({ modifiedCount: 1 }),
     };
 
     const mockJwtService = {
       sign: jest.fn().mockReturnValue('mock-jwt-token'),
+      verify: jest
+        .fn()
+        .mockReturnValue({ sub: mockUser._id, scope: 'pre-2fa' }),
+    };
+
+    const mockConfigService = {
+      get: jest.fn().mockReturnValue(''),
     };
 
     const module: TestingModule = await Test.createTestingModule({
@@ -50,12 +79,22 @@ describe('AuthService', () => {
         AuthService,
         { provide: getModelToken(User.name), useValue: mockUserModel },
         { provide: JwtService, useValue: mockJwtService },
+        { provide: ConfigService, useValue: mockConfigService },
       ],
     }).compile();
 
     service = module.get<AuthService>(AuthService);
     userModel = module.get(getModelToken(User.name));
     jwtService = module.get(JwtService);
+    configService = module.get(ConfigService);
+
+    // Defaults de los mocks de otplib/qrcode
+    (authenticator.generateSecret as jest.Mock).mockReturnValue('SECRETBASE32');
+    (authenticator.keyuri as jest.Mock).mockReturnValue('otpauth://totp/x');
+    (authenticator.verify as jest.Mock).mockReturnValue(true);
+    (QRCode.toDataURL as jest.Mock).mockResolvedValue(
+      'data:image/png;base64,xx',
+    );
   });
 
   // ─── Login lockout ────────────────────────────────────────────────────────
@@ -107,7 +146,10 @@ describe('AuthService', () => {
       mockUser.lockUntil = null;
       userModel.findOne.mockResolvedValue(mockUser);
 
-      await service.login({ email: 'test@perc.com', password: 'correctPassword' });
+      await service.login({
+        email: 'test@perc.com',
+        password: 'correctPassword',
+      });
 
       expect(mockUser.failedLoginAttempts).toBe(0);
       expect(mockUser.lockUntil).toBeNull();
@@ -138,7 +180,10 @@ describe('AuthService', () => {
       mockUser.tokenVersion = 5;
       userModel.findOne.mockResolvedValue(mockUser);
 
-      await service.login({ email: 'test@perc.com', password: 'correctPassword' });
+      await service.login({
+        email: 'test@perc.com',
+        password: 'correctPassword',
+      });
 
       expect(jwtService.sign).toHaveBeenCalledWith(
         expect.objectContaining({ tokenVersion: 5 }),
@@ -196,7 +241,11 @@ describe('AuthService', () => {
       mockUser.mustChangePassword = true;
       userModel.findById.mockResolvedValue(mockUser);
 
-      await service.changePassword(mockUser._id, 'correctPassword', 'newPassword123');
+      await service.changePassword(
+        mockUser._id,
+        'correctPassword',
+        'newPassword123',
+      );
 
       expect(mockUser.mustChangePassword).toBe(false);
     });
@@ -205,7 +254,11 @@ describe('AuthService', () => {
       mockUser.tokenVersion = 1;
       userModel.findById.mockResolvedValue(mockUser);
 
-      await service.changePassword(mockUser._id, 'correctPassword', 'newPassword123');
+      await service.changePassword(
+        mockUser._id,
+        'correctPassword',
+        'newPassword123',
+      );
 
       expect(mockUser.tokenVersion).toBe(2);
     });
@@ -242,7 +295,168 @@ describe('AuthService', () => {
     it('throws ConflictException on duplicate email', async () => {
       userModel.findOne.mockResolvedValue(mockUser);
 
-      await expect(service.register(registerDto)).rejects.toThrow(ConflictException);
+      await expect(service.register(registerDto)).rejects.toThrow(
+        ConflictException,
+      );
+    });
+  });
+
+  // ─── Login 2FA (TOTP) ──────────────────────────────────────────────────────
+
+  describe('login 2FA', () => {
+    const enable2fa = () =>
+      configService.get.mockImplementation((k: string) =>
+        k === 'login2fa.enabled'
+          ? true
+          : k === 'totp.encKey'
+            ? TEST_ENC_KEY
+            : '',
+      );
+
+    it('usuario SIN TOTP recibe challenge de enrolamiento (no access_token)', async () => {
+      enable2fa();
+      mockUser.totpHabilitado = false;
+      userModel.findOne.mockResolvedValue(mockUser);
+      userModel.findById.mockResolvedValue(mockUser);
+
+      const res: any = await service.login({
+        email: 'test@perc.com',
+        password: 'correctPassword',
+      });
+
+      expect(res.requiere2fa).toBe(true);
+      expect(res.requiereEnrolarTotp).toBe(true);
+      expect(res.challengeToken).toBe('mock-jwt-token');
+      expect(res.enrolamiento?.qrDataUrl).toBeTruthy();
+      expect(res.access_token).toBeUndefined();
+    });
+
+    it('usuario CON TOTP recibe challenge de verificación', async () => {
+      enable2fa();
+      mockUser.totpHabilitado = true;
+      mockUser.totpSecretCifrado = cifrar('SECRETBASE32', TEST_ENC_KEY);
+      userModel.findOne.mockResolvedValue(mockUser);
+
+      const res: any = await service.login({
+        email: 'test@perc.com',
+        password: 'correctPassword',
+      });
+
+      expect(res.requiere2fa).toBe(true);
+      expect(res.requiereEnrolarTotp).toBe(false);
+      expect(res.access_token).toBeUndefined();
+    });
+
+    it('loginVerificarTotp con código válido devuelve access_token', async () => {
+      enable2fa();
+      mockUser.totpHabilitado = true;
+      mockUser.totpSecretCifrado = cifrar('SECRETBASE32', TEST_ENC_KEY);
+      userModel.findById.mockResolvedValue(mockUser);
+      (authenticator.verify as jest.Mock).mockReturnValue(true);
+
+      const res = await service.loginVerificarTotp('challenge', '123456');
+      expect(res.access_token).toBe('mock-jwt-token');
+    });
+
+    it('loginVerificarTotp con código inválido y sin recovery lanza 401', async () => {
+      enable2fa();
+      mockUser.totpHabilitado = true;
+      mockUser.totpSecretCifrado = cifrar('SECRETBASE32', TEST_ENC_KEY);
+      mockUser.codigosRecuperacion = [];
+      userModel.findById.mockResolvedValue(mockUser);
+      (authenticator.verify as jest.Mock).mockReturnValue(false);
+
+      await expect(
+        service.loginVerificarTotp('challenge', '000000'),
+      ).rejects.toThrow(UnauthorizedException);
+    });
+
+    it('loginVerificarTotp acepta un código de recuperación (single-use)', async () => {
+      enable2fa();
+      mockUser.totpHabilitado = true;
+      mockUser.totpSecretCifrado = cifrar('SECRETBASE32', TEST_ENC_KEY);
+      const recovery = 'abc123';
+      mockUser.codigosRecuperacion = [await bcrypt.hash(recovery, 10)];
+      userModel.findById.mockResolvedValue(mockUser);
+      (authenticator.verify as jest.Mock).mockReturnValue(false);
+
+      const res = await service.loginVerificarTotp('challenge', recovery);
+      expect(res.access_token).toBe('mock-jwt-token');
+      // Consumo atómico vía $pull (single-use), no mutación en memoria.
+      expect(userModel.updateOne).toHaveBeenCalledWith(
+        expect.objectContaining({ _id: mockUser._id }),
+        expect.objectContaining({ $pull: expect.anything() }),
+      );
+    });
+
+    it('loginEnrolarTotp habilita TOTP y devuelve access_token + recovery codes', async () => {
+      enable2fa();
+      mockUser.totpHabilitado = false;
+      // confirmarTotp valida contra el secreto PROVISIONAL (no el activo).
+      mockUser.totpSecretProvisional = cifrar('SECRETBASE32', TEST_ENC_KEY);
+      userModel.findById.mockResolvedValue(mockUser);
+      (authenticator.verify as jest.Mock).mockReturnValue(true);
+
+      const res = await service.loginEnrolarTotp('challenge', '123456');
+      expect(res.access_token).toBe('mock-jwt-token');
+      expect(res.codigosRecuperacion.length).toBeGreaterThan(0);
+      expect(mockUser.totpHabilitado).toBe(true);
+    });
+
+    it('challenge inválido (verify lanza) → 401', async () => {
+      enable2fa();
+      jwtService.verify.mockImplementation(() => {
+        throw new Error('jwt expired');
+      });
+      await expect(
+        service.loginVerificarTotp('expirado', '123456'),
+      ).rejects.toThrow(UnauthorizedException);
+    });
+
+    it('SEGURIDAD: enrolarTotp NO destruye un 2FA ya activo (rechaza re-enrolamiento)', async () => {
+      enable2fa();
+      mockUser.totpHabilitado = true;
+      mockUser.totpSecretCifrado = cifrar('SECRETO-ACTIVO', TEST_ENC_KEY);
+      userModel.findById.mockResolvedValue(mockUser);
+
+      await expect(service.enrolarTotp(mockUser._id)).rejects.toThrow(
+        BadRequestException,
+      );
+      // El secreto activo y el flag siguen intactos (no hubo downgrade).
+      expect(mockUser.totpHabilitado).toBe(true);
+      expect(mockUser.totpSecretCifrado).toBeTruthy();
+    });
+
+    it('challenge con tokenVersion distinta (password reseteada) → 401', async () => {
+      enable2fa();
+      mockUser.totpHabilitado = true;
+      mockUser.totpSecretCifrado = cifrar('SECRETBASE32', TEST_ENC_KEY);
+      mockUser.tokenVersion = 5; // el usuario avanzó de versión tras el challenge
+      jwtService.verify.mockReturnValue({
+        sub: mockUser._id,
+        scope: 'pre-2fa',
+        tokenVersion: 2,
+      });
+      userModel.findById.mockResolvedValue(mockUser);
+
+      await expect(
+        service.loginVerificarTotp('viejo', '123456'),
+      ).rejects.toThrow(UnauthorizedException);
+    });
+
+    it('SEGURIDAD: loginVerificarTotp bloquea la cuenta tras 5 códigos inválidos', async () => {
+      enable2fa();
+      mockUser.totpHabilitado = true;
+      mockUser.totpSecretCifrado = cifrar('SECRETBASE32', TEST_ENC_KEY);
+      mockUser.codigosRecuperacion = [];
+      mockUser.failedLoginAttempts = 4; // el 5º fallo dispara el lockout
+      userModel.findById.mockResolvedValue(mockUser);
+      (authenticator.verify as jest.Mock).mockReturnValue(false);
+
+      await expect(
+        service.loginVerificarTotp('challenge', '000000'),
+      ).rejects.toThrow(UnauthorizedException);
+      expect(mockUser.lockUntil).not.toBeNull();
     });
   });
 });

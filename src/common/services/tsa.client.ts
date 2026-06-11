@@ -33,7 +33,10 @@ export class TsaClient {
 
   constructor(private config: ConfigService) {
     this.url = this.config.get<string>('TSA_URL') || 'https://freetsa.org/tsr';
-    this.timeoutMs = parseInt(this.config.get<string>('TSA_TIMEOUT_MS') || '3000', 10);
+    this.timeoutMs = parseInt(
+      this.config.get<string>('TSA_TIMEOUT_MS') || '3000',
+      10,
+    );
     this.enabled = this.config.get<string>('TSA_ENABLED') !== 'false';
   }
 
@@ -45,7 +48,9 @@ export class TsaClient {
    * Devuelve el TimeStampResp en base64, o null si el sello falló (ya logueado).
    * Nunca lanza — la falla del TSA no debe bloquear la transición.
    */
-  async timestamp(payload: string): Promise<{ token: string | null; error?: string }> {
+  async timestamp(
+    payload: string,
+  ): Promise<{ token: string | null; error?: string }> {
     if (!this.enabled) return { token: null };
     try {
       const digest = createHash('sha256').update(payload).digest();
@@ -69,7 +74,10 @@ export class TsaClient {
         clearTimeout(timer);
       }
     } catch (err: any) {
-      const msg = err.name === 'AbortError' ? `TSA timeout (>${this.timeoutMs}ms)` : err.message;
+      const msg =
+        err.name === 'AbortError'
+          ? `TSA timeout (>${this.timeoutMs}ms)`
+          : err.message;
       this.logger.warn(`TSA timestamp failed: ${msg}`);
       return { token: null, error: msg };
     }
@@ -79,21 +87,54 @@ export class TsaClient {
     const asn1 = forge.asn1;
     // hashAlgorithm
     const algId = asn1.create(asn1.Class.UNIVERSAL, asn1.Type.SEQUENCE, true, [
-      asn1.create(asn1.Class.UNIVERSAL, asn1.Type.OID, false, asn1.oidToDer(TsaClient.SHA256_OID).getBytes()),
+      asn1.create(
+        asn1.Class.UNIVERSAL,
+        asn1.Type.OID,
+        false,
+        asn1.oidToDer(TsaClient.SHA256_OID).getBytes(),
+      ),
       asn1.create(asn1.Class.UNIVERSAL, asn1.Type.NULL, false, ''),
     ]);
     // messageImprint
-    const messageImprint = asn1.create(asn1.Class.UNIVERSAL, asn1.Type.SEQUENCE, true, [
-      algId,
-      asn1.create(asn1.Class.UNIVERSAL, asn1.Type.OCTETSTRING, false, digest.toString('binary')),
-    ]);
+    const messageImprint = asn1.create(
+      asn1.Class.UNIVERSAL,
+      asn1.Type.SEQUENCE,
+      true,
+      [
+        algId,
+        asn1.create(
+          asn1.Class.UNIVERSAL,
+          asn1.Type.OCTETSTRING,
+          false,
+          digest.toString('binary'),
+        ),
+      ],
+    );
     // version (1) + messageImprint + nonce + certReq=true
-    const version = asn1.create(asn1.Class.UNIVERSAL, asn1.Type.INTEGER, false, String.fromCharCode(1));
+    const version = asn1.create(
+      asn1.Class.UNIVERSAL,
+      asn1.Type.INTEGER,
+      false,
+      String.fromCharCode(1),
+    );
     const nonceBytes = randomBytes(8);
-    const nonce = asn1.create(asn1.Class.UNIVERSAL, asn1.Type.INTEGER, false, nonceBytes.toString('binary'));
-    const certReq = asn1.create(asn1.Class.UNIVERSAL, asn1.Type.BOOLEAN, false, String.fromCharCode(0xff));
+    const nonce = asn1.create(
+      asn1.Class.UNIVERSAL,
+      asn1.Type.INTEGER,
+      false,
+      nonceBytes.toString('binary'),
+    );
+    const certReq = asn1.create(
+      asn1.Class.UNIVERSAL,
+      asn1.Type.BOOLEAN,
+      false,
+      String.fromCharCode(0xff),
+    );
     const tsq = asn1.create(asn1.Class.UNIVERSAL, asn1.Type.SEQUENCE, true, [
-      version, messageImprint, nonce, certReq,
+      version,
+      messageImprint,
+      nonce,
+      certReq,
     ]);
     const der = asn1.toDer(tsq).getBytes();
     return Buffer.from(der, 'binary');

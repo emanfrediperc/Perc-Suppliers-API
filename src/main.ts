@@ -1,14 +1,28 @@
 import { NestFactory } from '@nestjs/core';
 import { ValidationPipe } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
+import type { NestExpressApplication } from '@nestjs/platform-express';
 import helmet from 'helmet';
 import { AppModule } from './app.module';
 import { HttpExceptionFilter } from './common/filters/http-exception.filter';
 
 async function bootstrap() {
-  const app = await NestFactory.create(AppModule);
+  const app = await NestFactory.create<NestExpressApplication>(AppModule);
 
-  app.use(helmet());
+  // Detrás de ALB + CloudFront el cliente real está a N hops. Confiar en un número
+  // ACOTADO de proxies (no `true`) hace que req.ip use el X-Forwarded-For correcto
+  // sin que un cliente pueda spoofearlo. Configurable vía TRUST_PROXY_HOPS.
+  const trustProxyHops =
+    app.get(ConfigService).get<number>('forensics.trustProxyHops') ?? 2;
+  app.set('trust proxy', trustProxyHops);
+
+  // HSTS explícito: fuerza HTTPS por 1 año (solo surte efecto sobre TLS; inocuo en dev HTTP).
+  app.use(
+    helmet({
+      hsts: { maxAge: 31536000, includeSubDomains: true, preload: true },
+    }),
+  );
 
   app.setGlobalPrefix('api/v1');
 
@@ -42,7 +56,9 @@ async function bootstrap() {
 
     const document = SwaggerModule.createDocument(app, config);
     SwaggerModule.setup('api/docs', app, document);
-    console.log(`Swagger UI: http://localhost:${process.env.PORT || 3100}/api/docs`);
+    console.log(
+      `Swagger UI: http://localhost:${process.env.PORT || 3100}/api/docs`,
+    );
   } else {
     console.log('Swagger UI disabled (NODE_ENV=production)');
   }

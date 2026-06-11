@@ -14,15 +14,33 @@ export class AuditLog {
   @Prop({
     required: true,
     enum: [
-      'crear', 'editar', 'eliminar',
-      'pagar', 'anular', 'cancelar', 'renovar',
-      'aprobar', 'rechazar',
-      'login', 'sync',
-      'token-emitido', 'token-emitido-reenvio',
+      'crear',
+      'editar',
+      'eliminar',
+      'pagar',
+      'anular',
+      'cancelar',
+      'renovar',
+      'aprobar',
+      'rechazar',
+      'login',
+      'sync',
+      'token-emitido',
+      'token-emitido-reenvio',
       'decidir-via-token',
-      'aprobacion-reenviada', 'rechazo-terminal',
-      'ejecutar', 'procesar', 'reagendar', 'revertir',
+      'aprobacion-reenviada',
+      'rechazo-terminal',
+      'ejecutar',
+      'procesar',
+      'reagendar',
+      'revertir',
       'apocrifo-override',
+      'step-up-iniciado',
+      'step-up-satisfecho',
+      'step-up-fallido',
+      'step-up-bloqueado',
+      'totp-enrolado',
+      'totp-revocado',
     ],
   })
   accion: string;
@@ -38,6 +56,9 @@ export class AuditLog {
 
   @Prop()
   ip: string;
+
+  @Prop()
+  userAgent: string;
 
   @Prop()
   descripcion: string;

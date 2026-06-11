@@ -16,10 +16,9 @@ describe('AppController (e2e)', () => {
     await app.init();
   });
 
-  it('/ (GET)', () => {
-    return request(app.getHttpServer())
-      .get('/')
-      .expect(200)
-      .expect('Hello World!');
+  it('la app levanta y el servidor responde', () => {
+    // La API usa prefijo /api/v1 y no expone endpoint root; un 404 confirma
+    // que el AppModule compila, levanta y el server responde (smoke test).
+    return request(app.getHttpServer()).get('/').expect(404);
   });
 });

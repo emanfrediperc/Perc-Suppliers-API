@@ -1,4 +1,10 @@
-import { Injectable, NotFoundException, BadRequestException, ForbiddenException, ConflictException } from '@nestjs/common';
+import {
+  Injectable,
+  NotFoundException,
+  BadRequestException,
+  ForbiddenException,
+  ConflictException,
+} from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import {
@@ -9,8 +15,14 @@ import {
 } from './schemas/solicitud-pago.schema';
 import { Factura, FacturaDocument } from '../factura/schemas/factura.schema';
 import { Pago, PagoDocument } from '../pago/schemas/pago.schema';
-import { OrdenPago, OrdenPagoDocument } from '../orden-pago/schemas/orden-pago.schema';
-import { Convenio, ConvenioDocument } from '../convenio/schemas/convenio.schema';
+import {
+  OrdenPago,
+  OrdenPagoDocument,
+} from '../orden-pago/schemas/orden-pago.schema';
+import {
+  Convenio,
+  ConvenioDocument,
+} from '../convenio/schemas/convenio.schema';
 import { User, UserDocument } from '../../auth/schemas/user.schema';
 import { CreateSolicitudPagoDto } from './dto/create-solicitud-pago.dto';
 import { CancelarDto, ReagendarDto, RevertirDto } from './dto/transition.dto';
@@ -22,10 +34,14 @@ import { ExportService } from '../../common/services/export.service';
 import { EmailService } from '../../integrations/email/email.service';
 import { Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { HashChainService } from './hash-chain.service';
-import { TsaClient } from './tsa.client';
+import { HashChainService } from '../../common/services/hash-chain.service';
+import { TsaClient } from '../../common/services/tsa.client';
 
-interface AuthUser { userId: string; email?: string; role?: string }
+interface AuthUser {
+  userId: string;
+  email?: string;
+  role?: string;
+}
 
 const TRANSITIONS: Record<string, EstadoSolicitud[]> = {
   aprobar: ['pendiente'],
@@ -40,7 +56,8 @@ export class SolicitudPagoService {
   private readonly logger = new Logger(SolicitudPagoService.name);
 
   constructor(
-    @InjectModel(SolicitudPago.name) private solicitudModel: Model<SolicitudPagoDocument>,
+    @InjectModel(SolicitudPago.name)
+    private solicitudModel: Model<SolicitudPagoDocument>,
     @InjectModel(Factura.name) private facturaModel: Model<FacturaDocument>,
     @InjectModel(Pago.name) private pagoModel: Model<PagoDocument>,
     @InjectModel(OrdenPago.name) private ordenModel: Model<OrdenPagoDocument>,
@@ -61,7 +78,8 @@ export class SolicitudPagoService {
     if (query.tipo) q.tipo = query.tipo;
     if (query.factura) q.factura = new Types.ObjectId(query.factura);
     if (query.ordenPago) q.ordenPago = new Types.ObjectId(query.ordenPago);
-    if (query.empresaProveedora) q.empresaProveedora = new Types.ObjectId(query.empresaProveedora);
+    if (query.empresaProveedora)
+      q.empresaProveedora = new Types.ObjectId(query.empresaProveedora);
 
     const data = await this.solicitudModel
       .find(q)
@@ -76,7 +94,11 @@ export class SolicitudPagoService {
 
     const rows = data.map((s: any) => ({
       tipo: s.tipo,
-      referencia: s.factura?.numero ? `Factura ${s.factura.numero}` : (s.ordenPago?.numero ? `Orden ${s.ordenPago.numero}` : '—'),
+      referencia: s.factura?.numero
+        ? `Factura ${s.factura.numero}`
+        : s.ordenPago?.numero
+          ? `Orden ${s.ordenPago.numero}`
+          : '—',
       proveedor: s.empresaProveedora?.razonSocial,
       cuit: s.empresaProveedora?.cuit,
       monto: s.monto,
@@ -92,31 +114,45 @@ export class SolicitudPagoService {
       revertido: s.revertido ? 'Sí' : 'No',
     }));
 
-    return this.exportService.generateExcel(rows, [
-      { header: 'Tipo', key: 'tipo', type: 'string' as any },
-      { header: 'Referencia', key: 'referencia', type: 'string' as any },
-      { header: 'Proveedor', key: 'proveedor', type: 'string' as any },
-      { header: 'CUIT', key: 'cuit', type: 'string' as any },
-      { header: 'Monto', key: 'monto', type: 'currency' as any },
-      { header: 'Medio Pago', key: 'medioPago', type: 'string' as any },
-      { header: 'Estado', key: 'estado', type: 'string' as any },
-      { header: 'F. Vencimiento', key: 'fechaVencimiento', type: 'date' as any },
-      { header: 'Creado por', key: 'creadoPor', type: 'string' as any },
-      { header: 'Creado en', key: 'creadoEn', type: 'datetime' as any },
-      { header: 'Aprobado por', key: 'aprobadoPor', type: 'string' as any },
-      { header: 'Aprobado en', key: 'aprobadoEn', type: 'datetime' as any },
-      { header: 'Procesado por', key: 'procesadoPor', type: 'string' as any },
-      { header: 'Procesado en', key: 'procesadoEn', type: 'datetime' as any },
-      { header: 'Revertido', key: 'revertido', type: 'string' as any },
-    ], 'Solicitudes de Pago');
+    return this.exportService.generateExcel(
+      rows,
+      [
+        { header: 'Tipo', key: 'tipo', type: 'string' as any },
+        { header: 'Referencia', key: 'referencia', type: 'string' as any },
+        { header: 'Proveedor', key: 'proveedor', type: 'string' as any },
+        { header: 'CUIT', key: 'cuit', type: 'string' as any },
+        { header: 'Monto', key: 'monto', type: 'currency' as any },
+        { header: 'Medio Pago', key: 'medioPago', type: 'string' as any },
+        { header: 'Estado', key: 'estado', type: 'string' as any },
+        {
+          header: 'F. Vencimiento',
+          key: 'fechaVencimiento',
+          type: 'date' as any,
+        },
+        { header: 'Creado por', key: 'creadoPor', type: 'string' as any },
+        { header: 'Creado en', key: 'creadoEn', type: 'datetime' as any },
+        { header: 'Aprobado por', key: 'aprobadoPor', type: 'string' as any },
+        { header: 'Aprobado en', key: 'aprobadoEn', type: 'datetime' as any },
+        { header: 'Procesado por', key: 'procesadoPor', type: 'string' as any },
+        { header: 'Procesado en', key: 'procesadoEn', type: 'datetime' as any },
+        { header: 'Revertido', key: 'revertido', type: 'string' as any },
+      ],
+      'Solicitudes de Pago',
+    );
   }
 
-  async create(dto: CreateSolicitudPagoDto, user: AuthUser): Promise<SolicitudPagoDocument> {
+  async create(
+    dto: CreateSolicitudPagoDto,
+    user: AuthUser,
+  ): Promise<SolicitudPagoDocument> {
     if (!dto.factura === !dto.ordenPago) {
-      throw new BadRequestException('Debe especificarse exactamente uno: factura u ordenPago');
+      throw new BadRequestException(
+        'Debe especificarse exactamente uno: factura u ordenPago',
+      );
     }
     if (dto.tipo === 'compromiso') {
-      if (!dto.fechaVencimiento) throw new BadRequestException('Compromiso requiere fechaVencimiento');
+      if (!dto.fechaVencimiento)
+        throw new BadRequestException('Compromiso requiere fechaVencimiento');
       if (new Date(dto.fechaVencimiento).getTime() <= Date.now()) {
         throw new BadRequestException('fechaVencimiento debe ser futura');
       }
@@ -130,7 +166,9 @@ export class SolicitudPagoService {
       const factura = await this.facturaModel.findById(dto.factura);
       if (!factura) throw new NotFoundException('Factura no encontrada');
       if (factura.estado === 'anulada' || factura.estado === 'pagada') {
-        throw new BadRequestException(`Factura está ${factura.estado}, no admite solicitud de pago`);
+        throw new BadRequestException(
+          `Factura está ${factura.estado}, no admite solicitud de pago`,
+        );
       }
       empresaProveedora = factura.empresaProveedora;
       saldoDisponible = factura.saldoPendiente;
@@ -139,7 +177,9 @@ export class SolicitudPagoService {
       const orden = await this.ordenModel.findById(dto.ordenPago);
       if (!orden) throw new NotFoundException('Orden de pago no encontrada');
       if (orden.estado === 'anulada' || orden.estado === 'pagada') {
-        throw new BadRequestException(`Orden está ${orden.estado}, no admite solicitud de pago`);
+        throw new BadRequestException(
+          `Orden está ${orden.estado}, no admite solicitud de pago`,
+        );
       }
       empresaProveedora = orden.empresaProveedora as any;
       saldoDisponible = orden.saldoPendiente;
@@ -147,10 +187,14 @@ export class SolicitudPagoService {
     }
 
     // Solicitudes activas (no procesadas/canceladas) ya comprometen saldo
-    const activasFilter: any = { estado: { $in: ['pendiente', 'en_proceso', 'pago_en_proceso_perc'] } };
+    const activasFilter: any = {
+      estado: { $in: ['pendiente', 'en_proceso', 'pago_en_proceso_perc'] },
+    };
     if (dto.factura) activasFilter.factura = new Types.ObjectId(dto.factura);
     else activasFilter.ordenPago = new Types.ObjectId(dto.ordenPago!);
-    const activas = await this.solicitudModel.find(activasFilter, { monto: 1 }).lean();
+    const activas = await this.solicitudModel
+      .find(activasFilter, { monto: 1 })
+      .lean();
     const yaComprometido = activas.reduce((sum, s) => sum + (s.monto || 0), 0);
     const disponibleReal = saldoDisponible - yaComprometido;
 
@@ -174,7 +218,9 @@ export class SolicitudPagoService {
       empresaProveedora,
       tipo: dto.tipo,
       monto: dto.monto,
-      fechaVencimiento: dto.fechaVencimiento ? new Date(dto.fechaVencimiento) : undefined,
+      fechaVencimiento: dto.fechaVencimiento
+        ? new Date(dto.fechaVencimiento)
+        : undefined,
       nota: dto.nota,
       medioPago: dto.medioPago,
       bancoOrigen: dto.bancoOrigen,
@@ -183,7 +229,7 @@ export class SolicitudPagoService {
       historial: [firstEntry],
     });
 
-    this.notificarContabilidad(solicitud, displayRef).catch(err =>
+    this.notificarContabilidad(solicitud, displayRef).catch((err) =>
       this.logger.warn(`No se pudo notificar a contabilidad: ${err.message}`),
     );
 
@@ -197,7 +243,8 @@ export class SolicitudPagoService {
     if (filter.tipo) q.tipo = filter.tipo;
     if (filter.factura) q.factura = new Types.ObjectId(filter.factura);
     if (filter.ordenPago) q.ordenPago = new Types.ObjectId(filter.ordenPago);
-    if (filter.empresaProveedora) q.empresaProveedora = new Types.ObjectId(filter.empresaProveedora);
+    if (filter.empresaProveedora)
+      q.empresaProveedora = new Types.ObjectId(filter.empresaProveedora);
 
     const [data, total] = await Promise.all([
       this.solicitudModel
@@ -233,16 +280,39 @@ export class SolicitudPagoService {
     return sol;
   }
 
-  async aprobar(id: string, motivo: string | undefined, user: AuthUser): Promise<SolicitudPagoDocument> {
-    return this.transicion(id, 'aprobar', 'en_proceso', user, motivo, doc => {
-      doc.aprobadoPor = { user: new Types.ObjectId(user.userId), fecha: new Date(), motivo } as any;
+  async aprobar(
+    id: string,
+    motivo: string | undefined,
+    user: AuthUser,
+  ): Promise<SolicitudPagoDocument> {
+    return this.transicion(id, 'aprobar', 'en_proceso', user, motivo, (doc) => {
+      doc.aprobadoPor = {
+        user: new Types.ObjectId(user.userId),
+        fecha: new Date(),
+        motivo,
+      } as any;
     });
   }
 
-  async ejecutar(id: string, motivo: string | undefined, user: AuthUser): Promise<SolicitudPagoDocument> {
-    return this.transicion(id, 'ejecutar', 'pago_en_proceso_perc', user, motivo, doc => {
-      doc.ejecutadoPor = { user: new Types.ObjectId(user.userId), fecha: new Date(), motivo } as any;
-    });
+  async ejecutar(
+    id: string,
+    motivo: string | undefined,
+    user: AuthUser,
+  ): Promise<SolicitudPagoDocument> {
+    return this.transicion(
+      id,
+      'ejecutar',
+      'pago_en_proceso_perc',
+      user,
+      motivo,
+      (doc) => {
+        doc.ejecutadoPor = {
+          user: new Types.ObjectId(user.userId),
+          fecha: new Date(),
+          motivo,
+        } as any;
+      },
+    );
   }
 
   async procesar(
@@ -252,12 +322,16 @@ export class SolicitudPagoService {
     user: AuthUser,
   ): Promise<SolicitudPagoDocument> {
     if (!files.perc || !files.retenciones) {
-      throw new BadRequestException('Procesar requiere ambos comprobantes (perc y retenciones)');
+      throw new BadRequestException(
+        'Procesar requiere ambos comprobantes (perc y retenciones)',
+      );
     }
     const current = await this.solicitudModel.findById(id);
     if (!current) throw new NotFoundException('Solicitud no encontrada');
     if (!TRANSITIONS.procesar.includes(current.estado)) {
-      throw new BadRequestException(`No se puede procesar desde estado "${current.estado}"`);
+      throw new BadRequestException(
+        `No se puede procesar desde estado "${current.estado}"`,
+      );
     }
 
     // Adquisición atómica del estado "procesado"
@@ -267,7 +341,9 @@ export class SolicitudPagoService {
       { new: true },
     );
     if (!sol) {
-      throw new ConflictException('La solicitud ya fue procesada por otro usuario');
+      throw new ConflictException(
+        'La solicitud ya fue procesada por otro usuario',
+      );
     }
 
     const ahora = new Date();
@@ -275,9 +351,12 @@ export class SolicitudPagoService {
 
     // Subir comprobantes en paralelo
     const subidos = await Promise.all(
-      (['perc', 'retenciones'] as TipoComprobante[]).map(async tipo => {
+      (['perc', 'retenciones'] as TipoComprobante[]).map(async (tipo) => {
         const file = files[tipo]!;
-        const uploaded = await this.storageService.upload(file, `solicitud-pago/${id}/${tipo}`);
+        const uploaded = await this.storageService.upload(
+          file,
+          `solicitud-pago/${id}/${tipo}`,
+        );
         return {
           tipo,
           url: uploaded.url,
@@ -355,21 +434,42 @@ export class SolicitudPagoService {
     return sol;
   }
 
-  async cancelar(id: string, dto: CancelarDto, user: AuthUser): Promise<SolicitudPagoDocument> {
+  async cancelar(
+    id: string,
+    dto: CancelarDto,
+    user: AuthUser,
+  ): Promise<SolicitudPagoDocument> {
     const sol = await this.solicitudModel.findById(id);
     if (!sol) throw new NotFoundException('Solicitud no encontrada');
     this.assertCompromisoEditable(sol);
-    return this.transicion(id, 'cancelar', 'cancelado', user, dto.motivo, doc => {
-      doc.canceladoPor = { user: new Types.ObjectId(user.userId), fecha: new Date(), motivo: dto.motivo } as any;
-    });
+    return this.transicion(
+      id,
+      'cancelar',
+      'cancelado',
+      user,
+      dto.motivo,
+      (doc) => {
+        doc.canceladoPor = {
+          user: new Types.ObjectId(user.userId),
+          fecha: new Date(),
+          motivo: dto.motivo,
+        } as any;
+      },
+    );
   }
 
-  async reagendar(id: string, dto: ReagendarDto, user: AuthUser): Promise<SolicitudPagoDocument> {
+  async reagendar(
+    id: string,
+    dto: ReagendarDto,
+    user: AuthUser,
+  ): Promise<SolicitudPagoDocument> {
     const sol = await this.solicitudModel.findById(id);
     if (!sol) throw new NotFoundException('Solicitud no encontrada');
     this.assertCompromisoEditable(sol);
     if (!TRANSITIONS.reagendar.includes(sol.estado)) {
-      throw new BadRequestException(`No se puede reagendar desde estado "${sol.estado}"`);
+      throw new BadRequestException(
+        `No se puede reagendar desde estado "${sol.estado}"`,
+      );
     }
     const nueva = new Date(dto.nuevaFecha);
     if (nueva.getTime() <= Date.now()) {
@@ -406,7 +506,9 @@ export class SolicitudPagoService {
     const current = await this.solicitudModel.findById(id);
     if (!current) throw new NotFoundException('Solicitud no encontrada');
     if (!allowed.includes(current.estado)) {
-      throw new BadRequestException(`No se puede ${accion} desde estado "${current.estado}"`);
+      throw new BadRequestException(
+        `No se puede ${accion} desde estado "${current.estado}"`,
+      );
     }
     const estadoAnterior = current.estado;
 
@@ -437,7 +539,9 @@ export class SolicitudPagoService {
 
   private assertCompromisoEditable(sol: SolicitudPagoDocument) {
     if (sol.tipo !== 'compromiso') {
-      throw new ForbiddenException('Solo compromisos pueden cancelarse o reagendarse');
+      throw new ForbiddenException(
+        'Solo compromisos pueden cancelarse o reagendarse',
+      );
     }
     if (!sol.fechaVencimiento || sol.fechaVencimiento.getTime() > Date.now()) {
       throw new ForbiddenException(
@@ -450,7 +554,10 @@ export class SolicitudPagoService {
     const factura = await this.facturaModel.findById(facturaId);
     if (!factura) return;
     const pagosActivos = await this.pagoModel
-      .find({ factura: factura._id, estado: { $nin: ['anulado', 'rechazado'] } })
+      .find({
+        factura: factura._id,
+        estado: { $nin: ['anulado', 'rechazado'] },
+      })
       .lean();
     const montoPagado = pagosActivos.reduce((sum, p) => sum + p.montoBase, 0);
     factura.montoPagado = montoPagado;
@@ -460,7 +567,11 @@ export class SolicitudPagoService {
     await factura.save();
   }
 
-  private async aplicarPagoAOrden(ordenId: any, monto: number, pagoId: Types.ObjectId): Promise<void> {
+  private async aplicarPagoAOrden(
+    ordenId: any,
+    monto: number,
+    pagoId: Types.ObjectId,
+  ): Promise<void> {
     const orden = await this.ordenModel.findById(ordenId).populate('facturas');
     if (!orden) return;
 
@@ -474,13 +585,19 @@ export class SolicitudPagoService {
     let restante = monto;
     const facturasPendientes = (orden.facturas as any[])
       .filter((f: any) => f.estado !== 'pagada' && f.estado !== 'anulada')
-      .sort((a: any, b: any) => new Date(a.fecha).getTime() - new Date(b.fecha).getTime());
+      .sort(
+        (a: any, b: any) =>
+          new Date(a.fecha).getTime() - new Date(b.fecha).getTime(),
+      );
 
     for (const factura of facturasPendientes) {
       if (restante <= 0) break;
       const aplicar = Math.min(restante, factura.saldoPendiente);
       factura.montoPagado += aplicar;
-      factura.saldoPendiente = Math.max(0, factura.montoTotal - factura.montoPagado);
+      factura.saldoPendiente = Math.max(
+        0,
+        factura.montoTotal - factura.montoPagado,
+      );
       if (factura.saldoPendiente <= 0) {
         factura.saldoPendiente = 0;
         factura.estado = 'pagada';
@@ -498,7 +615,16 @@ export class SolicitudPagoService {
    */
   private async buildHistorialEntry(
     prevHash: string,
-    entry: { accion: string; usuario: Types.ObjectId; motivo?: string; estadoAnterior?: string; estadoNuevo?: string; fechaAnterior?: Date; fechaNueva?: Date; fecha: Date },
+    entry: {
+      accion: string;
+      usuario: Types.ObjectId;
+      motivo?: string;
+      estadoAnterior?: string;
+      estadoNuevo?: string;
+      fechaAnterior?: Date;
+      fechaNueva?: Date;
+      fecha: Date;
+    },
   ): Promise<any> {
     const hash = this.hashChain.computeHash(prevHash, entry as any);
     const tsa = await this.tsa.timestamp(hash);
@@ -512,9 +638,21 @@ export class SolicitudPagoService {
 
   private async pushHistorial(
     sol: SolicitudPagoDocument,
-    entry: { accion: string; usuario: Types.ObjectId; motivo?: string; estadoAnterior?: string; estadoNuevo?: string; fechaAnterior?: Date; fechaNueva?: Date; fecha: Date },
+    entry: {
+      accion: string;
+      usuario: Types.ObjectId;
+      motivo?: string;
+      estadoAnterior?: string;
+      estadoNuevo?: string;
+      fechaAnterior?: Date;
+      fechaNueva?: Date;
+      fecha: Date;
+    },
   ): Promise<void> {
-    const prev = sol.historial.length > 0 ? sol.historial[sol.historial.length - 1].hash : '';
+    const prev =
+      sol.historial.length > 0
+        ? sol.historial[sol.historial.length - 1].hash
+        : '';
     const completeEntry = await this.buildHistorialEntry(prev, entry);
     sol.historial.push(completeEntry);
   }
@@ -522,11 +660,17 @@ export class SolicitudPagoService {
   /**
    * Verifica integridad de la cadena de historial.
    */
-  async revertir(id: string, dto: RevertirDto, user: AuthUser): Promise<SolicitudPagoDocument> {
+  async revertir(
+    id: string,
+    dto: RevertirDto,
+    user: AuthUser,
+  ): Promise<SolicitudPagoDocument> {
     const sol = await this.solicitudModel.findById(id);
     if (!sol) throw new NotFoundException('Solicitud no encontrada');
     if (sol.estado !== 'procesado') {
-      throw new BadRequestException(`Solo se puede revertir una solicitud procesada (estado actual: ${sol.estado})`);
+      throw new BadRequestException(
+        `Solo se puede revertir una solicitud procesada (estado actual: ${sol.estado})`,
+      );
     }
     if (sol.revertido) {
       throw new BadRequestException('La solicitud ya fue revertida');
@@ -534,12 +678,18 @@ export class SolicitudPagoService {
 
     // Adquisición atómica del flag revertido
     const acquired = await this.solicitudModel.findOneAndUpdate(
-      { _id: new Types.ObjectId(id), estado: 'procesado', revertido: { $ne: true } },
+      {
+        _id: new Types.ObjectId(id),
+        estado: 'procesado',
+        revertido: { $ne: true },
+      },
       { $set: { revertido: true } },
       { new: true },
     );
     if (!acquired) {
-      throw new ConflictException('La solicitud fue modificada por otro usuario');
+      throw new ConflictException(
+        'La solicitud fue modificada por otro usuario',
+      );
     }
 
     // Anular el Pago generado
@@ -559,7 +709,11 @@ export class SolicitudPagoService {
 
     const ahora = new Date();
     const userId = new Types.ObjectId(user.userId);
-    acquired.revertidoPor = { user: userId, fecha: ahora, motivo: dto.motivo } as any;
+    acquired.revertidoPor = {
+      user: userId,
+      fecha: ahora,
+      motivo: dto.motivo,
+    } as any;
     await this.pushHistorial(acquired, {
       accion: 'revertir',
       usuario: userId,
@@ -570,31 +724,49 @@ export class SolicitudPagoService {
     return acquired;
   }
 
-  private async revertirAplicacionEnOrden(ordenId: any, monto: number): Promise<void> {
+  private async revertirAplicacionEnOrden(
+    ordenId: any,
+    monto: number,
+  ): Promise<void> {
     const orden = await this.ordenModel.findById(ordenId).populate('facturas');
     if (!orden) return;
     orden.montoPagado = Math.max(0, (orden.montoPagado || 0) - monto);
     orden.saldoPendiente = orden.montoTotal - orden.montoPagado;
-    orden.estado = orden.saldoPendiente <= 0 ? 'pagada' : (orden.montoPagado > 0 ? 'parcial' : 'pendiente');
+    orden.estado =
+      orden.saldoPendiente <= 0
+        ? 'pagada'
+        : orden.montoPagado > 0
+          ? 'parcial'
+          : 'pendiente';
     await orden.save();
     // Distribuir la reversión a facturas más nuevas primero (espejo de aplicarPagoAOrden)
     let restante = monto;
     const facturas = (orden.facturas as any[])
       .filter((f: any) => f.estado !== 'anulada')
-      .sort((a: any, b: any) => new Date(b.fecha).getTime() - new Date(a.fecha).getTime());
+      .sort(
+        (a: any, b: any) =>
+          new Date(b.fecha).getTime() - new Date(a.fecha).getTime(),
+      );
     for (const f of facturas) {
       if (restante <= 0) break;
       const aplicado = f.montoPagado || 0;
       const restar = Math.min(restante, aplicado);
       f.montoPagado = aplicado - restar;
       f.saldoPendiente = f.montoTotal - f.montoPagado;
-      f.estado = f.saldoPendiente <= 0 ? 'pagada' : (f.montoPagado > 0 ? 'parcial' : 'pendiente');
+      f.estado =
+        f.saldoPendiente <= 0
+          ? 'pagada'
+          : f.montoPagado > 0
+            ? 'parcial'
+            : 'pendiente';
       await f.save();
       restante -= restar;
     }
   }
 
-  async pendingCountForRole(role: string): Promise<{ count: number; estado: string | null }> {
+  async pendingCountForRole(
+    role: string,
+  ): Promise<{ count: number; estado: string | null }> {
     const map: Record<string, EstadoSolicitud> = {
       contabilidad: 'pendiente',
       tesoreria: 'en_proceso',
@@ -613,16 +785,25 @@ export class SolicitudPagoService {
     return { count, estado };
   }
 
-  async getComprobanteUrl(id: string, tipo: 'perc' | 'retenciones'): Promise<{ url: string; nombre: string }> {
+  async getComprobanteUrl(
+    id: string,
+    tipo: 'perc' | 'retenciones',
+  ): Promise<{ url: string; nombre: string }> {
     const sol = await this.solicitudModel.findById(id).lean();
     if (!sol) throw new NotFoundException('Solicitud no encontrada');
     const comp = (sol.comprobantes || []).find((c: any) => c.tipo === tipo);
-    if (!comp) throw new NotFoundException(`Comprobante "${tipo}" no encontrado`);
+    if (!comp)
+      throw new NotFoundException(`Comprobante "${tipo}" no encontrado`);
     const url = await this.storageService.getSignedDownloadUrl(comp.key);
     return { url, nombre: comp.nombre };
   }
 
-  async verificarIntegridad(id: string): Promise<{ valid: boolean; brokenAt: number | null; total: number; conTsa: number }> {
+  async verificarIntegridad(id: string): Promise<{
+    valid: boolean;
+    brokenAt: number | null;
+    total: number;
+    conTsa: number;
+  }> {
     const sol = await this.solicitudModel.findById(id).lean();
     if (!sol) throw new NotFoundException('Solicitud no encontrada');
     const result = this.hashChain.verifyChain(sol.historial as any);
@@ -639,18 +820,23 @@ export class SolicitudPagoService {
       .select('email')
       .lean();
     if (recipients.length === 0) {
-      this.logger.warn('No hay usuarios con rol contabilidad activos para notificar');
+      this.logger.warn(
+        'No hay usuarios con rol contabilidad activos para notificar',
+      );
       return;
     }
-    const baseUrl = this.config.get<string>('CORS_ORIGIN') || 'http://localhost:4200';
+    const baseUrl =
+      this.config.get<string>('CORS_ORIGIN') || 'http://localhost:4200';
     const link = `${baseUrl}/solicitudes-pago/${sol._id}`;
-    const tipoLabel = sol.tipo === 'compromiso' ? 'Compromiso de Pago' : 'Solicitud de Pago';
+    const tipoLabel =
+      sol.tipo === 'compromiso' ? 'Compromiso de Pago' : 'Solicitud de Pago';
     const fechaVenc = sol.fechaVencimiento
       ? sol.fechaVencimiento.toLocaleDateString('es-AR')
       : '—';
-    const monto = new Intl.NumberFormat('es-AR', { style: 'currency', currency: 'ARS' }).format(
-      sol.monto,
-    );
+    const monto = new Intl.NumberFormat('es-AR', {
+      style: 'currency',
+      currency: 'ARS',
+    }).format(sol.monto);
     const subject = `[Perc] Nueva ${tipoLabel} pendiente de aprobación`;
     const html = `
       <h2>Nueva ${tipoLabel} pendiente</h2>
@@ -666,6 +852,10 @@ export class SolicitudPagoService {
       </table>
       <p style="margin-top:16px"><a href="${link}" style="background:#6366f1;color:#fff;padding:10px 18px;text-decoration:none;border-radius:6px">Revisar y aprobar</a></p>
     `;
-    await Promise.all(recipients.map(r => this.emailService.sendEmail(r.email, subject, html)));
+    await Promise.all(
+      recipients.map((r) =>
+        this.emailService.sendEmail(r.email, subject, html),
+      ),
+    );
   }
 }
