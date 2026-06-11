@@ -48,15 +48,30 @@ describe('HashChainService', () => {
 
     it('ignores order of object keys (canonical sort)', () => {
       // Both objects have same data, just constructed in different field order
-      const a = svc.computeHash('', { accion: 'crear', usuario: u1, estadoNuevo: 'pendiente', fecha: t('2026-05-05T10:00:00Z') });
-      const b = svc.computeHash('', { fecha: t('2026-05-05T10:00:00Z'), estadoNuevo: 'pendiente', usuario: u1, accion: 'crear' });
+      const a = svc.computeHash('', {
+        accion: 'crear',
+        usuario: u1,
+        estadoNuevo: 'pendiente',
+        fecha: t('2026-05-05T10:00:00Z'),
+      });
+      const b = svc.computeHash('', {
+        fecha: t('2026-05-05T10:00:00Z'),
+        estadoNuevo: 'pendiente',
+        usuario: u1,
+        accion: 'crear',
+      });
       expect(a).toBe(b);
     });
 
     it('does NOT include hash/tsaToken/tsaError in the digest', () => {
       const base = entry();
       const a = svc.computeHash('', base);
-      const b = svc.computeHash('', { ...base, hash: 'whatever', tsaToken: 'xxx', tsaError: 'yyy' });
+      const b = svc.computeHash('', {
+        ...base,
+        hash: 'whatever',
+        tsaToken: 'xxx',
+        tsaError: 'yyy',
+      });
       expect(a).toBe(b);
     });
   });
@@ -64,7 +79,7 @@ describe('HashChainService', () => {
   describe('verifyChain', () => {
     function chainOf(entries: any[]) {
       let prev = '';
-      return entries.map(e => {
+      return entries.map((e) => {
         const hash = svc.computeHash(prev, e);
         prev = hash;
         return { ...e, hash };
@@ -83,9 +98,21 @@ describe('HashChainService', () => {
     it('returns valid for a multi-entry chain', () => {
       const chain = chainOf([
         entry({ accion: 'crear', estadoNuevo: 'pendiente' }),
-        entry({ accion: 'aprobar', estadoAnterior: 'pendiente', estadoNuevo: 'en_proceso' }),
-        entry({ accion: 'ejecutar', estadoAnterior: 'en_proceso', estadoNuevo: 'pago_en_proceso_perc' }),
-        entry({ accion: 'procesar', estadoAnterior: 'pago_en_proceso_perc', estadoNuevo: 'procesado' }),
+        entry({
+          accion: 'aprobar',
+          estadoAnterior: 'pendiente',
+          estadoNuevo: 'en_proceso',
+        }),
+        entry({
+          accion: 'ejecutar',
+          estadoAnterior: 'en_proceso',
+          estadoNuevo: 'pago_en_proceso_perc',
+        }),
+        entry({
+          accion: 'procesar',
+          estadoAnterior: 'pago_en_proceso_perc',
+          estadoNuevo: 'procesado',
+        }),
       ]);
       expect(svc.verifyChain(chain)).toEqual({ valid: true, brokenAt: null });
     });

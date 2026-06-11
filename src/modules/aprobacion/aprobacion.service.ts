@@ -1,4 +1,11 @@
-import { Injectable, NotFoundException, BadRequestException, ForbiddenException, Logger } from '@nestjs/common';
+import {
+  Injectable,
+  NotFoundException,
+  BadRequestException,
+  ForbiddenException,
+  UnauthorizedException,
+  Logger,
+} from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
 import { ConfigService } from '@nestjs/config';
@@ -17,13 +24,30 @@ import { ConfiguracionService } from '../configuracion/configuracion.service';
 import { AuditLogService } from '../audit-log/audit-log.service';
 import { EmailService } from '../../integrations/email/email.service';
 import { User, UserDocument } from '../../auth/schemas/user.schema';
+import { HashChainService } from '../../common/services/hash-chain.service';
+import { TsaClient } from '../../common/services/tsa.client';
+import { StepUpService } from './step-up.service';
+
+/** Rastro forense de una decisión, persistido junto a la decisión para sobrevivir al TTL del token. */
+export interface DatosForenses {
+  ip?: string;
+  userAgent?: string;
+  /** SHA256 del magic-link token usado (ausente en el path JWT). */
+  tokenHash?: string;
+  geo?: { pais?: string; ciudad?: string };
+  stepUpRequerido?: boolean;
+  stepUpSatisfecho?: boolean;
+  factorStepUp?: string;
+  desafioId?: string;
+}
 
 @Injectable()
 export class AprobacionService {
   private readonly logger = new Logger(AprobacionService.name);
 
   constructor(
-    @InjectModel(Aprobacion.name) private aprobacionModel: Model<AprobacionDocument>,
+    @InjectModel(Aprobacion.name)
+    private aprobacionModel: Model<AprobacionDocument>,
     @InjectModel(User.name) private userModel: Model<UserDocument>,
     private readonly notifService: NotificacionService,
     private readonly configService: ConfiguracionService,
@@ -32,7 +56,41 @@ export class AprobacionService {
     private readonly auditLogService: AuditLogService,
     private readonly emailService: EmailService,
     private readonly eventEmitter: EventEmitter2,
+    private readonly hashChain: HashChainService,
+    private readonly tsa: TsaClient,
+    private readonly stepUpService: StepUpService,
   ) {}
+
+  /**
+   * Determina si una aprobación exige segundo factor (step-up) y qué factor.
+   * Config: singleton Mongo `step_up_aprobacion` con fallback a env (stepUp.*).
+   */
+  async requiereStepUp(
+    aprobacion: AprobacionDocument,
+  ): Promise<{ requerido: boolean; factor: 'password' | 'totp' }> {
+    const singleton = await this.configService.get('step_up_aprobacion');
+    const habilitado =
+      singleton.habilitado ??
+      this.nestConfigService.get<boolean>('stepUp.habilitado') ??
+      false;
+    const factor: 'password' | 'totp' =
+      singleton.factorPorDefecto ??
+      this.nestConfigService.get<'password' | 'totp'>(
+        'stepUp.factorPorDefecto',
+      ) ??
+      'password';
+    if (!habilitado) return { requerido: false, factor };
+
+    const montoUmbral =
+      singleton.montoUmbral ??
+      this.nestConfigService.get<number>('stepUp.montoUmbral') ??
+      1_000_000;
+    const tiposSiempre: string[] = singleton.tiposQueSiempreRequieren ?? [];
+    const requerido =
+      tiposSiempre.includes(aprobacion.entidad) ||
+      aprobacion.monto >= montoUmbral;
+    return { requerido, factor };
+  }
 
   async requiresApproval(_monto: number): Promise<boolean> {
     // Todas las operaciones requieren aprobación bajo el nuevo workflow.
@@ -43,7 +101,9 @@ export class AprobacionService {
 
   async getRequiredApprovals(monto: number): Promise<number> {
     const config = await this.configService.getApprovalConfig();
-    const rule = config.rules.find(r => monto >= r.min && monto < (r.max ?? Infinity));
+    const rule = config.rules.find(
+      (r) => monto >= r.min && monto < (r.max ?? Infinity),
+    );
     return rule?.aprobaciones || 1;
   }
 
@@ -58,7 +118,10 @@ export class AprobacionService {
     datosOperacion?: Record<string, any>;
   }): Promise<AprobacionDocument> {
     // T011 — Verificar que existan aprobadores activos antes de crear la solicitud
-    const aprobadoresActivos = await this.userModel.find({ role: 'aprobador', activo: true });
+    const aprobadoresActivos = await this.userModel.find({
+      role: 'aprobador',
+      activo: true,
+    });
     if (aprobadoresActivos.length === 0) {
       throw new BadRequestException(
         'No hay usuarios con rol aprobador activos. No se puede crear la solicitud.',
@@ -66,14 +129,30 @@ export class AprobacionService {
     }
 
     const aprobacionesRequeridas = await this.getRequiredApprovals(data.monto);
+
+    // Primera entry del historial tamper-evident: arranca la cadena en la creación.
+    const ahora = new Date();
+    const crearEntry = {
+      accion: 'crear',
+      usuario: data.createdBy,
+      email: data.createdByEmail,
+      fecha: ahora,
+    };
+    const crearHash = this.hashChain.computeHash('', crearEntry as any);
+
     const aprobacion = await this.aprobacionModel.create({
       ...data,
       estado: 'pendiente',
       aprobacionesRequeridas,
+      historial: [{ ...crearEntry, hash: crearHash }],
     });
 
+    // Sello TSA best-effort, no bloqueante.
+    this.sellarTsaEnBackground(aprobacion._id.toString(), crearHash);
+
     // T012 — Flag leído antes para decidir si notifyUsersByRole manda mail o no
-    const magicLinkEnabled = this.nestConfigService.get<boolean>('magicLink.enabled');
+    const magicLinkEnabled =
+      this.nestConfigService.get<boolean>('magicLink.enabled');
 
     // T011 — Notificar a los aprobadores in-app. El mail solo se manda aquí
     // si el magic-link está deshabilitado; si está on, el mail "bonito" con
@@ -92,8 +171,11 @@ export class AprobacionService {
 
     // T012 — Generar magic-link tokens y enviar emails a cada aprobador
     if (magicLinkEnabled) {
-      const baseUrl = this.nestConfigService.get<string>('magicLink.baseUrl') ?? 'http://localhost:4200/aprobar';
-      const ttlHours = this.nestConfigService.get<number>('magicLink.ttlHours') ?? 48;
+      const baseUrl =
+        this.nestConfigService.get<string>('magicLink.baseUrl') ??
+        'http://localhost:4200/aprobar';
+      const ttlHours =
+        this.nestConfigService.get<number>('magicLink.ttlHours') ?? 48;
       const aprobacionId = aprobacion._id.toString();
 
       for (const aprobador of aprobadoresActivos) {
@@ -105,30 +187,40 @@ export class AprobacionService {
         );
 
         const magicLink = `${baseUrl}?t=${encodeURIComponent(rawToken)}`;
-        const expiraEn = new Date(Date.now() + ttlHours * 3_600_000).toLocaleString('es-AR');
+        const expiraEn = new Date(
+          Date.now() + ttlHours * 3_600_000,
+        ).toLocaleString('es-AR');
 
         // Enviar email (fire-and-forget; el token es la fuente de verdad)
-        this.emailService.sendAprobacionMagicLink(aprobador.email, {
-          tipo: data.tipo,
-          entidad: data.entidad,
-          descripcion: data.descripcion,
-          monto: data.monto,
-          solicitante: data.createdByEmail,
-          magicLink,
-          expiraEn,
-        }).catch((e) => this.logger.warn(`accion best-effort fallo: ${e?.message ?? e}`));
+        this.emailService
+          .sendAprobacionMagicLink(aprobador.email, {
+            tipo: data.tipo,
+            entidad: data.entidad,
+            descripcion: data.descripcion,
+            monto: data.monto,
+            solicitante: data.createdByEmail,
+            magicLink,
+            expiraEn,
+          })
+          .catch((e) =>
+            this.logger.warn(`accion best-effort fallo: ${e?.message ?? e}`),
+          );
 
         // T021 — Auditar emisión del token
-        this.auditLogService.log({
-          usuario: aprobadorId,
-          usuarioEmail: aprobador.email,
-          accion: 'token-emitido',
-          entidad: 'aprobaciones',
-          entidadId: aprobacionId,
-          cambios: { userEmail: aprobador.email },
-          ip: 'system',
-          descripcion: `Token magic-link emitido para aprobador ${aprobador.email}`,
-        }).catch((e) => this.logger.warn(`accion best-effort fallo: ${e?.message ?? e}`));
+        this.auditLogService
+          .log({
+            usuario: aprobadorId,
+            usuarioEmail: aprobador.email,
+            accion: 'token-emitido',
+            entidad: 'aprobaciones',
+            entidadId: aprobacionId,
+            cambios: { userEmail: aprobador.email },
+            ip: 'system',
+            descripcion: `Token magic-link emitido para aprobador ${aprobador.email}`,
+          })
+          .catch((e) =>
+            this.logger.warn(`accion best-effort fallo: ${e?.message ?? e}`),
+          );
       }
     }
 
@@ -136,7 +228,9 @@ export class AprobacionService {
   }
 
   async findPendientes() {
-    return this.aprobacionModel.find({ estado: 'pendiente' }).sort({ createdAt: -1 });
+    return this.aprobacionModel
+      .find({ estado: 'pendiente' })
+      .sort({ createdAt: -1 });
   }
 
   async findAll() {
@@ -150,20 +244,34 @@ export class AprobacionService {
   }
 
   async findByEntity(entidad: string, entidadId: string) {
-    return this.aprobacionModel.find({ entidad, entidadId }).sort({ createdAt: -1 });
+    return this.aprobacionModel
+      .find({ entidad, entidadId })
+      .sort({ createdAt: -1 });
   }
 
-  async decidir(id: string, user: { userId: string; email: string; nombre?: string }, decision: string, comentario?: string) {
+  async decidir(
+    id: string,
+    user: { userId: string; email: string; nombre?: string },
+    decision: string,
+    comentario?: string,
+    forense?: DatosForenses,
+  ) {
     const aprobacion = await this.aprobacionModel.findById(id);
     if (!aprobacion) throw new NotFoundException('Aprobacion no encontrada');
-    if (aprobacion.estado !== 'pendiente') throw new BadRequestException('Esta aprobacion ya fue resuelta');
+    if (aprobacion.estado !== 'pendiente')
+      throw new BadRequestException('Esta aprobacion ya fue resuelta');
 
     if (aprobacion.createdBy === user.userId) {
       throw new BadRequestException('No puede aprobar su propia solicitud');
     }
 
-    const alreadyDecided = aprobacion.aprobadores.find(a => a.userId === user.userId);
-    if (alreadyDecided) throw new BadRequestException('Ya registró una decision para esta aprobacion');
+    const alreadyDecided = aprobacion.aprobadores.find(
+      (a) => a.userId === user.userId,
+    );
+    if (alreadyDecided)
+      throw new BadRequestException(
+        'Ya registró una decision para esta aprobacion',
+      );
 
     aprobacion.aprobadores.push({
       userId: user.userId,
@@ -172,6 +280,27 @@ export class AprobacionService {
       decision,
       comentario: comentario || '',
       fecha: new Date(),
+      ip: forense?.ip,
+      userAgent: forense?.userAgent,
+      tokenHash: forense?.tokenHash,
+      geo: forense?.geo,
+      stepUpRequerido: forense?.stepUpRequerido,
+      stepUpSatisfecho: forense?.stepUpSatisfecho,
+      factorStepUp: forense?.factorStepUp,
+      desafioId: forense?.desafioId,
+    });
+
+    // No-repudio: registrar la decisión en el historial tamper-evident (hash encadenado).
+    const histHash = this.pushHistorialAprobacion(aprobacion, {
+      accion: 'decidir',
+      usuario: user.userId,
+      email: user.email,
+      estadoNuevo: decision,
+      motivo: comentario || undefined,
+      fecha: new Date(),
+      ip: forense?.ip,
+      userAgent: forense?.userAgent,
+      tokenHash: forense?.tokenHash,
     });
 
     if (decision === 'rechazada') {
@@ -186,7 +315,9 @@ export class AprobacionService {
         entidadId: aprobacion.entidadId,
       });
     } else {
-      const aprobaciones = aprobacion.aprobadores.filter(a => a.decision === 'aprobada').length;
+      const aprobaciones = aprobacion.aprobadores.filter(
+        (a) => a.decision === 'aprobada',
+      ).length;
       if (aprobaciones >= aprobacion.aprobacionesRequeridas) {
         aprobacion.estado = 'aprobada';
 
@@ -202,9 +333,10 @@ export class AprobacionService {
 
         // Aviso in-app a los operadores: tienen una operación aprobada lista para ejecutar.
         // sendEmail: false porque no necesitan mail — solo un badge/bell en el webapp.
-        const montoFmt = aprobacion.monto != null
-          ? `$${aprobacion.monto.toLocaleString('es-AR')}`
-          : '';
+        const montoFmt =
+          aprobacion.monto != null
+            ? `$${aprobacion.monto.toLocaleString('es-AR')}`
+            : '';
         await this.notifService.notifyUsersByRole(
           ['operador'],
           {
@@ -221,19 +353,27 @@ export class AprobacionService {
 
     await aprobacion.save();
 
+    // Sello RFC 3161 best-effort y NO bloqueante: el click del aprobador no espera al TSA.
+    // El hash ya protege la entry; el token se parchea en background (la cadena no depende del token).
+    this.sellarTsaEnBackground(aprobacion._id.toString(), histHash);
+
     // T038 — Auditar rechazo terminal: sólo cuando ya existió al menos un ciclo previo
     // (es decir, la aprobación fue reenviada al menos una vez antes de este rechazo).
     if (decision === 'rechazada' && (aprobacion.intentos?.length ?? 0) > 0) {
-      this.auditLogService.log({
-        usuario: user.userId,
-        usuarioEmail: user.email,
-        accion: 'rechazo-terminal',
-        entidad: 'aprobaciones',
-        entidadId: id,
-        cambios: { cicloNumero: (aprobacion.intentos.length + 1) },
-        ip: 'system',
-        descripcion: `Rechazo terminal tras ${aprobacion.intentos.length} ciclos`,
-      }).catch((e) => this.logger.warn(`accion best-effort fallo: ${e?.message ?? e}`));
+      this.auditLogService
+        .log({
+          usuario: user.userId,
+          usuarioEmail: user.email,
+          accion: 'rechazo-terminal',
+          entidad: 'aprobaciones',
+          entidadId: id,
+          cambios: { cicloNumero: aprobacion.intentos.length + 1 },
+          ip: 'system',
+          descripcion: `Rechazo terminal tras ${aprobacion.intentos.length} ciclos`,
+        })
+        .catch((e) =>
+          this.logger.warn(`accion best-effort fallo: ${e?.message ?? e}`),
+        );
     }
 
     // T020 — Emitir evento cuando la aprobación alcanza un estado terminal.
@@ -243,12 +383,94 @@ export class AprobacionService {
         aprobacionId: aprobacion._id.toString(),
         entidad: aprobacion.entidad as AprobacionResueltaEvent['entidad'],
         entidadId: aprobacion.entidadId,
-        estado: aprobacion.estado as 'aprobada' | 'rechazada',
+        estado: aprobacion.estado,
       };
       this.eventEmitter.emit(APROBACION_RESUELTA, event);
     }
 
     return aprobacion;
+  }
+
+  /**
+   * Agrega una entry a la cadena de hash del historial (sync) y devuelve su hash.
+   * El sello TSA se aplica aparte y en background (ver sellarTsaEnBackground).
+   */
+  private pushHistorialAprobacion(
+    aprobacion: AprobacionDocument,
+    entry: {
+      accion: string;
+      usuario: string;
+      email?: string;
+      estadoNuevo?: string;
+      motivo?: string;
+      fecha: Date;
+      ip?: string;
+      userAgent?: string;
+      tokenHash?: string;
+    },
+  ): string {
+    if (!aprobacion.historial) aprobacion.historial = [];
+    const prev =
+      aprobacion.historial.length > 0
+        ? aprobacion.historial[aprobacion.historial.length - 1].hash
+        : '';
+    const hash = this.hashChain.computeHash(prev, entry as any);
+    aprobacion.historial.push({ ...entry, prevHash: prev || undefined, hash });
+    return hash;
+  }
+
+  /**
+   * Sella una entry del historial con un token RFC 3161 de forma asíncrona.
+   * NO bloquea la decisión (el click del aprobador no espera al TSA). La cadena de
+   * hash ya protege la entry; el token sólo agrega prueba-de-tiempo, y la cadena no
+   * depende de él (canonical excluye tsaToken). Best-effort: si falla, queda tsaError.
+   */
+  private sellarTsaEnBackground(aprobacionId: string, hash: string): void {
+    void this.tsa
+      .timestamp(hash)
+      .then(async (tsa) => {
+        if (!tsa.token && !tsa.error) return undefined;
+        const res = await this.aprobacionModel
+          .updateOne(
+            { _id: aprobacionId, 'historial.hash': hash },
+            {
+              $set: {
+                'historial.$.tsaToken': tsa.token ?? undefined,
+                'historial.$.tsaError': tsa.error,
+              },
+            },
+          )
+          .exec();
+        // Si no matcheó la entry, el sello se perdió silenciosamente — dejar rastro.
+        if (res.matchedCount === 0) {
+          this.logger.warn(
+            `TSA: no se pudo sellar (entry ${hash.slice(0, 12)}… no encontrada en aprobacion ${aprobacionId})`,
+          );
+        }
+        return res;
+      })
+      .catch((e: any) =>
+        this.logger.warn(`TSA sello async falló: ${e?.message ?? e}`),
+      );
+  }
+
+  /**
+   * Verifica la integridad de la cadena de hash del historial de una aprobación.
+   * Devuelve si es válida, el índice de la primera entry rota (o null), el total
+   * de entries y cuántas tienen sello TSA.
+   */
+  async verificarIntegridad(id: string): Promise<{
+    valid: boolean;
+    brokenAt: number | null;
+    total: number;
+    conTsa: number;
+  }> {
+    const aprobacion = await this.aprobacionModel.findById(id).lean();
+    if (!aprobacion) throw new NotFoundException('Aprobacion no encontrada');
+    const historial = (aprobacion.historial ?? []) as any[];
+    const result = this.hashChain.verifyChain(historial);
+    const conTsa = historial.filter((e) => !!e.tsaToken).length;
+    return { ...result, total: historial.length, conTsa };
   }
 
   /**
@@ -262,9 +484,13 @@ export class AprobacionService {
     comentario: string | undefined,
     ip: string,
     userAgent: string,
+    geo?: { pais?: string; ciudad?: string },
+    stepUpProof?: string,
+    desafioId?: string,
   ): Promise<AprobacionDocument> {
     // Verificar token — lanza UnauthorizedException con mensaje genérico si es inválido
-    const tokenDoc: AprobacionTokenDocument = await this.tokenService.verify(rawToken);
+    const tokenDoc: AprobacionTokenDocument =
+      await this.tokenService.verify(rawToken);
 
     // Resolver usuario desde el token
     const user = await this.userModel.findById(tokenDoc.userId);
@@ -279,28 +505,68 @@ export class AprobacionService {
 
     const aprobacionIdStr = tokenDoc.aprobacionId.toString();
 
-    // Delegar al método decidir existente (evita duplicar lógica de transición de estado)
+    // ENFORCEMENT step-up (server-side): si la aprobación exige segundo factor, el proof
+    // es obligatorio aunque el frontend intente auto-submitear desde el deep-link del email.
+    const aprobacionDoc = await this.aprobacionModel.findById(aprobacionIdStr);
+    if (!aprobacionDoc) throw new NotFoundException('Aprobacion no encontrada');
+    const stepUp = await this.requiereStepUp(aprobacionDoc);
+    let stepUpForense: Partial<DatosForenses> = {
+      stepUpRequerido: stepUp.requerido,
+    };
+    if (stepUp.requerido) {
+      if (!stepUpProof || !desafioId) {
+        throw new UnauthorizedException('Step-up requerido');
+      }
+      const proof = await this.stepUpService.validarYConsumirProof(
+        aprobacionIdStr,
+        userId,
+        desafioId,
+        stepUpProof,
+      );
+      stepUpForense = {
+        stepUpRequerido: true,
+        stepUpSatisfecho: true,
+        factorStepUp: proof.factorUsado ?? undefined,
+        desafioId: proof.desafioId,
+      };
+    }
+
+    // Delegar al método decidir existente (evita duplicar lógica de transición de estado).
+    // El rastro forense se persiste EN la decisión (sobrevive al TTL del token).
     const aprobacion = await this.decidir(
       aprobacionIdStr,
       { userId, email: user.email, nombre: user.nombre },
       decisionInterna,
       comentario,
+      { ip, userAgent, tokenHash: tokenDoc.tokenHash, geo, ...stepUpForense },
     );
 
-    // Consumir el token después de que la decisión fue registrada con éxito
-    await this.tokenService.consume(tokenDoc, ip, userAgent);
+    // Consumir el token después de que la decisión fue registrada con éxito.
+    // Best-effort: la decisión ya está persistida (fuente de verdad) y el re-uso del
+    // token queda bloqueado por el re-check de estado en decidir(); no hacer fallar la
+    // respuesta si el consume falla.
+    await this.tokenService
+      .consume(tokenDoc, ip, userAgent)
+      .catch((e: any) =>
+        this.logger.warn(`consume token best-effort falló: ${e?.message ?? e}`),
+      );
 
     // T021 — Auditar consumo del token (el interceptor global no corre en rutas sin JWT)
-    this.auditLogService.log({
-      usuario: userId,
-      usuarioEmail: user.email,
-      accion: 'decidir-via-token',
-      entidad: 'aprobaciones',
-      entidadId: aprobacionIdStr,
-      cambios: { decision: decisionInterna, comentario: comentario ?? '' },
-      ip,
-      descripcion: `${user.email} - decidir-via-token aprobaciones ${aprobacionIdStr}`,
-    }).catch((e) => this.logger.warn(`accion best-effort fallo: ${e?.message ?? e}`));
+    this.auditLogService
+      .log({
+        usuario: userId,
+        usuarioEmail: user.email,
+        accion: 'decidir-via-token',
+        entidad: 'aprobaciones',
+        entidadId: aprobacionIdStr,
+        cambios: { decision: decisionInterna, comentario: comentario ?? '' },
+        ip,
+        userAgent,
+        descripcion: `${user.email} - decidir-via-token aprobaciones ${aprobacionIdStr}`,
+      })
+      .catch((e) =>
+        this.logger.warn(`accion best-effort fallo: ${e?.message ?? e}`),
+      );
 
     return aprobacion;
   }
@@ -324,7 +590,9 @@ export class AprobacionService {
     // Validación 1: solo el creador (o admin) puede reenviar (decisión a1).
     // Admin puede reenviar cualquier aprobación por ser rol de soporte/override.
     if (user.role !== 'admin' && aprobacion.createdBy !== user.userId) {
-      throw new ForbiddenException('Solo quien creó la solicitud puede reenviarla');
+      throw new ForbiddenException(
+        'Solo quien creó la solicitud puede reenviarla',
+      );
     }
 
     // Validación 2: solo se pueden reenviar aprobaciones rechazadas
@@ -337,11 +605,16 @@ export class AprobacionService {
     // Validación 3: reenvíos restantes (decisión d3)
     const reenviosRestantes = aprobacion.reenviosRestantes ?? 1;
     if (reenviosRestantes <= 0) {
-      throw new BadRequestException('No quedan reenvíos disponibles para esta solicitud');
+      throw new BadRequestException(
+        'No quedan reenvíos disponibles para esta solicitud',
+      );
     }
 
     // Validación 4: debe haber al menos un aprobador activo
-    const aprobadoresActivos = await this.userModel.find({ role: 'aprobador', activo: true });
+    const aprobadoresActivos = await this.userModel.find({
+      role: 'aprobador',
+      activo: true,
+    });
     if (aprobadoresActivos.length === 0) {
       throw new BadRequestException(
         'No hay usuarios con rol aprobador activos. No se puede reenviar.',
@@ -351,7 +624,7 @@ export class AprobacionService {
     // Snapshot del ciclo actual en intentos[] (decisión c1)
     const intentoNumero = (aprobacion.intentos?.length ?? 0) + 1;
     const fechaInicio = aprobacion.intentos?.length
-      ? aprobacion.fechaReenvio ?? (aprobacion as any).createdAt
+      ? (aprobacion.fechaReenvio ?? (aprobacion as any).createdAt)
       : (aprobacion as any).createdAt;
 
     aprobacion.intentos.push({
@@ -375,12 +648,14 @@ export class AprobacionService {
     await this.tokenService.invalidateAllForAprobacion(aprobacionId);
 
     // Emitir nuevos tokens y enviar emails a todos los aprobadores activos
-    const magicLinkEnabled = this.nestConfigService.get<boolean>('magicLink.enabled');
+    const magicLinkEnabled =
+      this.nestConfigService.get<boolean>('magicLink.enabled');
     if (magicLinkEnabled) {
       const baseUrl =
         this.nestConfigService.get<string>('magicLink.baseUrl') ??
         'http://localhost:4200/aprobar';
-      const ttlHours = this.nestConfigService.get<number>('magicLink.ttlHours') ?? 48;
+      const ttlHours =
+        this.nestConfigService.get<number>('magicLink.ttlHours') ?? 48;
 
       for (const aprobador of aprobadoresActivos) {
         const aprobadorId = (aprobador._id as any).toString();
@@ -390,7 +665,9 @@ export class AprobacionService {
           aprobador.email,
         );
         const magicLink = `${baseUrl}?t=${encodeURIComponent(rawToken)}`;
-        const expiraEn = new Date(Date.now() + ttlHours * 3_600_000).toLocaleString('es-AR');
+        const expiraEn = new Date(
+          Date.now() + ttlHours * 3_600_000,
+        ).toLocaleString('es-AR');
 
         this.emailService
           .sendAprobacionMagicLink(aprobador.email, {
@@ -402,7 +679,9 @@ export class AprobacionService {
             magicLink,
             expiraEn,
           })
-          .catch((e) => this.logger.warn(`accion best-effort fallo: ${e?.message ?? e}`));
+          .catch((e) =>
+            this.logger.warn(`accion best-effort fallo: ${e?.message ?? e}`),
+          );
 
         // T038 — Auditar emisión de token en el reenvío
         this.auditLogService
@@ -412,11 +691,16 @@ export class AprobacionService {
             accion: 'token-emitido-reenvio',
             entidad: 'aprobaciones',
             entidadId: aprobacionId,
-            cambios: { userEmail: aprobador.email, cicloNumero: intentoNumero + 1 },
+            cambios: {
+              userEmail: aprobador.email,
+              cicloNumero: intentoNumero + 1,
+            },
             ip: 'system',
             descripcion: `Token magic-link emitido (reenvío) para aprobador ${aprobador.email}`,
           })
-          .catch((e) => this.logger.warn(`accion best-effort fallo: ${e?.message ?? e}`));
+          .catch((e) =>
+            this.logger.warn(`accion best-effort fallo: ${e?.message ?? e}`),
+          );
       }
     }
 
@@ -449,7 +733,9 @@ export class AprobacionService {
         ip: 'system',
         descripcion: `Aprobación reenviada por ${user.email} — ciclo ${intentoNumero + 1}`,
       })
-      .catch((e) => this.logger.warn(`accion best-effort fallo: ${e?.message ?? e}`));
+      .catch((e) =>
+        this.logger.warn(`accion best-effort fallo: ${e?.message ?? e}`),
+      );
 
     // Emitir evento para que los módulos upstream transicionen rechazado → esperando_aprobacion
     this.eventEmitter.emit(APROBACION_REENVIADA, {
@@ -485,20 +771,29 @@ export class AprobacionService {
       );
     }
 
-    const magicLinkEnabled = this.nestConfigService.get<boolean>('magicLink.enabled');
+    const magicLinkEnabled =
+      this.nestConfigService.get<boolean>('magicLink.enabled');
     if (!magicLinkEnabled) {
       throw new BadRequestException(
         'El flujo de magic link está deshabilitado (ENABLE_MAGIC_LINK=false). Contactar al admin.',
       );
     }
 
-    const aprobadoresActivos = await this.userModel.find({ role: 'aprobador', activo: true });
+    const aprobadoresActivos = await this.userModel.find({
+      role: 'aprobador',
+      activo: true,
+    });
     if (aprobadoresActivos.length === 0) {
-      throw new BadRequestException('No hay usuarios con rol aprobador activos.');
+      throw new BadRequestException(
+        'No hay usuarios con rol aprobador activos.',
+      );
     }
 
-    const baseUrl = this.nestConfigService.get<string>('magicLink.baseUrl') ?? 'http://localhost:4200/aprobar';
-    const ttlHours = this.nestConfigService.get<number>('magicLink.ttlHours') ?? 48;
+    const baseUrl =
+      this.nestConfigService.get<string>('magicLink.baseUrl') ??
+      'http://localhost:4200/aprobar';
+    const ttlHours =
+      this.nestConfigService.get<number>('magicLink.ttlHours') ?? 48;
 
     for (const aprobador of aprobadoresActivos) {
       const aprobadorId = (aprobador._id as any).toString();
@@ -510,28 +805,41 @@ export class AprobacionService {
       );
 
       const magicLink = `${baseUrl}?t=${encodeURIComponent(rawToken)}`;
-      const expiraEn = new Date(Date.now() + ttlHours * 3_600_000).toLocaleString('es-AR');
+      const expiraEn = new Date(
+        Date.now() + ttlHours * 3_600_000,
+      ).toLocaleString('es-AR');
 
-      this.emailService.sendAprobacionMagicLink(aprobador.email, {
-        tipo: aprobacion.tipo,
-        entidad: aprobacion.entidad,
-        descripcion: aprobacion.descripcion,
-        monto: aprobacion.monto,
-        solicitante: aprobacion.createdByEmail,
-        magicLink,
-        expiraEn,
-      }).catch((e) => this.logger.warn(`accion best-effort fallo: ${e?.message ?? e}`));
+      this.emailService
+        .sendAprobacionMagicLink(aprobador.email, {
+          tipo: aprobacion.tipo,
+          entidad: aprobacion.entidad,
+          descripcion: aprobacion.descripcion,
+          monto: aprobacion.monto,
+          solicitante: aprobacion.createdByEmail,
+          magicLink,
+          expiraEn,
+        })
+        .catch((e) =>
+          this.logger.warn(`accion best-effort fallo: ${e?.message ?? e}`),
+        );
 
-      this.auditLogService.log({
-        usuario: aprobadorId,
-        usuarioEmail: aprobador.email,
-        accion: 'token-emitido',
-        entidad: 'aprobaciones',
-        entidadId: aprobacionId,
-        cambios: { userEmail: aprobador.email, motivo: 'reenvio-mail-manual' },
-        ip: 'system',
-        descripcion: `Mail magic-link reenviado manualmente por ${user.email} a ${aprobador.email}`,
-      }).catch((e) => this.logger.warn(`accion best-effort fallo: ${e?.message ?? e}`));
+      this.auditLogService
+        .log({
+          usuario: aprobadorId,
+          usuarioEmail: aprobador.email,
+          accion: 'token-emitido',
+          entidad: 'aprobaciones',
+          entidadId: aprobacionId,
+          cambios: {
+            userEmail: aprobador.email,
+            motivo: 'reenvio-mail-manual',
+          },
+          ip: 'system',
+          descripcion: `Mail magic-link reenviado manualmente por ${user.email} a ${aprobador.email}`,
+        })
+        .catch((e) =>
+          this.logger.warn(`accion best-effort fallo: ${e?.message ?? e}`),
+        );
     }
 
     return {
@@ -554,15 +862,35 @@ export class AprobacionService {
     fechaSolicitud: Date;
     expiraEn: Date;
     aprobadorEmail: string;
+    requiereStepUp: boolean;
+    factorRequerido: 'password' | 'totp' | null;
+    aprobadorEnrolado: boolean;
   }> {
     // Verificar token — lanza UnauthorizedException con mensaje genérico si es inválido/usado/expirado
-    const tokenDoc: AprobacionTokenDocument = await this.tokenService.verify(rawToken);
+    const tokenDoc: AprobacionTokenDocument =
+      await this.tokenService.verify(rawToken);
 
-    const aprobacion = await this.aprobacionModel.findById(tokenDoc.aprobacionId);
+    const aprobacion = await this.aprobacionModel.findById(
+      tokenDoc.aprobacionId,
+    );
 
     // Si la aprobación no está pendiente, el token no es accionable — mismo error genérico
     if (!aprobacion || aprobacion.estado !== 'pendiente') {
       throw new Error('Token inválido o expirado');
+    }
+
+    const stepUp = await this.requiereStepUp(aprobacion);
+    let factorRequerido: 'password' | 'totp' | null = null;
+    let aprobadorEnrolado = false;
+    if (stepUp.requerido) {
+      aprobadorEnrolado = await this.stepUpService.aprobadorEnrolado(
+        tokenDoc.userId,
+      );
+      // Factor efectivo: si se pide TOTP pero el aprobador no está enrolado, se degrada a password.
+      factorRequerido =
+        stepUp.factor === 'totp' && !aprobadorEnrolado
+          ? 'password'
+          : stepUp.factor;
     }
 
     return {
@@ -574,6 +902,45 @@ export class AprobacionService {
       fechaSolicitud: (aprobacion as any).createdAt,
       expiraEn: tokenDoc.expiresAt,
       aprobadorEmail: tokenDoc.userEmail,
+      requiereStepUp: stepUp.requerido,
+      factorRequerido,
+      aprobadorEnrolado,
     };
+  }
+
+  /**
+   * Inicia un desafío de step-up para el token (resuelve el factor según config + enrolamiento).
+   * Lanza si la aprobación no requiere segundo factor.
+   */
+  async iniciarStepUp(rawToken: string, ip: string, userAgent: string) {
+    const tokenDoc = await this.tokenService.verify(rawToken);
+    const aprobacion = await this.aprobacionModel.findById(
+      tokenDoc.aprobacionId,
+    );
+    if (!aprobacion) throw new NotFoundException('Aprobacion no encontrada');
+    const { requerido, factor } = await this.requiereStepUp(aprobacion);
+    if (!requerido) {
+      throw new BadRequestException(
+        'Esta aprobación no requiere segundo factor',
+      );
+    }
+    return this.stepUpService.iniciarDesafio(rawToken, factor, ip, userAgent);
+  }
+
+  /** Verifica el segundo factor y devuelve el proof single-use. */
+  async verificarStepUp(
+    rawToken: string,
+    desafioId: string,
+    secreto: string,
+    ip: string,
+    userAgent: string,
+  ) {
+    return this.stepUpService.verificarDesafio(
+      rawToken,
+      desafioId,
+      secreto,
+      ip,
+      userAgent,
+    );
   }
 }

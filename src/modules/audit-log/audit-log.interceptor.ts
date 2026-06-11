@@ -1,6 +1,16 @@
-import { Injectable, NestInterceptor, ExecutionContext, CallHandler, Logger } from '@nestjs/common';
+import {
+  Injectable,
+  NestInterceptor,
+  ExecutionContext,
+  CallHandler,
+  Logger,
+} from '@nestjs/common';
 import { Observable, tap } from 'rxjs';
 import { AuditLogService } from './audit-log.service';
+import {
+  extraerIp,
+  extraerUserAgent,
+} from '../../common/utils/request-forense.util';
 
 const METHOD_ACTION_MAP: Record<string, string> = {
   POST: 'crear',
@@ -47,16 +57,24 @@ export class AuditLogInterceptor implements NestInterceptor {
       tap({
         next: (result) => {
           const resultId = result?._id?.toString() || result?.id || entidadId;
-          this.auditService.log({
-            usuario: user.userId,
-            usuarioEmail: user.email,
-            accion,
-            entidad,
-            entidadId: resultId,
-            cambios: method === 'PATCH' || method === 'PUT' ? request.body : undefined,
-            ip: request.ip,
-            descripcion: `${user.email} - ${accion} ${entidad}${resultId ? ' ' + resultId : ''}`,
-          }).catch((e) => this.logger.warn(`audit-log fallo: ${e?.message ?? e}`));
+          this.auditService
+            .log({
+              usuario: user.userId,
+              usuarioEmail: user.email,
+              accion,
+              entidad,
+              entidadId: resultId,
+              cambios:
+                method === 'PATCH' || method === 'PUT'
+                  ? request.body
+                  : undefined,
+              ip: extraerIp(request),
+              userAgent: extraerUserAgent(request),
+              descripcion: `${user.email} - ${accion} ${entidad}${resultId ? ' ' + resultId : ''}`,
+            })
+            .catch((e) =>
+              this.logger.warn(`audit-log fallo: ${e?.message ?? e}`),
+            );
         },
       }),
     );

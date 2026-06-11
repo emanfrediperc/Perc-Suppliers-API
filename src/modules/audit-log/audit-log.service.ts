@@ -22,19 +22,28 @@ export class AuditLogService {
     entidadId?: string;
     cambios?: Record<string, any>;
     ip?: string;
+    userAgent?: string;
     descripcion?: string;
   }) {
     let prevHash = '';
     if (data.entidadId) {
       const last = await this.auditModel
-        .findOne({ entidad: data.entidad, entidadId: data.entidadId, hash: { $exists: true, $ne: null } })
+        .findOne({
+          entidad: data.entidad,
+          entidadId: data.entidadId,
+          hash: { $exists: true, $ne: null },
+        })
         .sort({ createdAt: -1 })
         .select('hash')
         .lean();
       prevHash = last?.hash || '';
     }
     const hash = this.computeHash(prevHash, this.canonicalEntry(data));
-    return this.auditModel.create({ ...data, hash, prevHash: prevHash || undefined });
+    return this.auditModel.create({
+      ...data,
+      hash,
+      prevHash: prevHash || undefined,
+    });
   }
 
   private canonicalEntry(e: Partial<AuditLog>) {
@@ -46,6 +55,7 @@ export class AuditLogService {
       entidadId: e.entidadId,
       cambios: e.cambios,
       ip: e.ip,
+      userAgent: e.userAgent,
       descripcion: e.descripcion,
     };
   }
@@ -56,14 +66,16 @@ export class AuditLogService {
    */
   private computeHash(prevHash: string, entry: Record<string, any>): string {
     const ordered = Object.keys(entry)
-      .filter(k => entry[k] !== undefined)
+      .filter((k) => entry[k] !== undefined)
       .sort()
       .reduce<Record<string, any>>((acc, k) => {
         const v = entry[k];
         acc[k] = v instanceof Date ? v.toISOString() : v;
         return acc;
       }, {});
-    return createHash('sha256').update(prevHash + JSON.stringify(ordered)).digest('hex');
+    return createHash('sha256')
+      .update(prevHash + JSON.stringify(ordered))
+      .digest('hex');
   }
 
   /**
@@ -76,7 +88,9 @@ export class AuditLogService {
       .sort({ createdAt: 1 })
       .lean();
     if (entries.length === 0) {
-      throw new NotFoundException('No hay entradas de audit log para esta entidad');
+      throw new NotFoundException(
+        'No hay entradas de audit log para esta entidad',
+      );
     }
 
     let prev = '';
@@ -88,14 +102,26 @@ export class AuditLogService {
       }
       const expected = this.computeHash(prev, this.canonicalEntry(e as any));
       if (e.hash !== expected) {
-        return { valid: false, brokenAt: i, total: entries.length, sinHash: entries.filter(x => !x.hash).length };
+        return {
+          valid: false,
+          brokenAt: i,
+          total: entries.length,
+          sinHash: entries.filter((x) => !x.hash).length,
+        };
       }
       prev = e.hash;
     }
-    return { valid: true, brokenAt: null, total: entries.length, sinHash: entries.filter(x => !x.hash).length };
+    return {
+      valid: true,
+      brokenAt: null,
+      total: entries.length,
+      sinHash: entries.filter((x) => !x.hash).length,
+    };
   }
 
-  async findAll(query: AuditLogQueryDto): Promise<PaginatedResponseDto<AuditLogDocument>> {
+  async findAll(
+    query: AuditLogQueryDto,
+  ): Promise<PaginatedResponseDto<AuditLogDocument>> {
     const { page, limit, entidad, entidadId, usuario, accion } = query;
     const filter: any = {};
     if (entidad) filter.entidad = entidad;
@@ -104,13 +130,23 @@ export class AuditLogService {
     if (accion) filter.accion = accion;
 
     const [data, total] = await Promise.all([
-      this.auditModel.find(filter).sort({ createdAt: -1 }).skip((page - 1) * limit).limit(limit),
+      this.auditModel
+        .find(filter)
+        .sort({ createdAt: -1 })
+        .skip((page - 1) * limit)
+        .limit(limit),
       this.auditModel.countDocuments(filter),
     ]);
     return new PaginatedResponseDto(data, total, page, limit);
   }
 
-  async findByEntity(entidad: string, entidadId: string): Promise<AuditLogDocument[]> {
-    return this.auditModel.find({ entidad, entidadId }).sort({ createdAt: -1 }).limit(50);
+  async findByEntity(
+    entidad: string,
+    entidadId: string,
+  ): Promise<AuditLogDocument[]> {
+    return this.auditModel
+      .find({ entidad, entidadId })
+      .sort({ createdAt: -1 })
+      .limit(50);
   }
 }
