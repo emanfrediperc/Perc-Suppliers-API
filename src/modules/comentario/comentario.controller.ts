@@ -1,4 +1,14 @@
-import { Controller, Get, Post, Delete, Body, Param, Query, Req, UseGuards } from '@nestjs/common';
+import {
+  Controller,
+  Get,
+  Post,
+  Delete,
+  Body,
+  Param,
+  Query,
+  Req,
+  UseGuards,
+} from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../../auth/guards/roles.guard';
@@ -14,11 +24,16 @@ export class ComentarioController {
   constructor(private readonly service: ComentarioService) {}
 
   @Get()
-  findByEntidad(@Query('entidad') entidad: string, @Query('entidadId') entidadId: string) {
-    return this.service.findByEntidad(entidad, entidadId);
+  findByEntidad(
+    @Query('entidad') entidad: string,
+    @Query('entidadId') entidadId: string,
+  ) {
+    // String() evita NoSQL injection: un objeto (?entidad[$ne]=null) deja de ser operador.
+    return this.service.findByEntidad(String(entidad), String(entidadId));
   }
 
   @Post()
+  @Roles('admin', 'tesoreria', 'operador', 'aprobador')
   create(@Body() dto: CreateComentarioDto, @Req() req: any) {
     const user = req.user;
     return this.service.create(dto, {

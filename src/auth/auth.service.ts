@@ -45,7 +45,7 @@ export class AuthService {
       throw new ConflictException('El email ya esta registrado');
     }
 
-    const hashedPassword = await bcrypt.hash(registerDto.password, 10);
+    const hashedPassword = await bcrypt.hash(registerDto.password, 12);
     const user = await this.userModel.create({
       ...registerDto,
       password: hashedPassword,
@@ -143,6 +143,13 @@ export class AuthService {
     if (!user || !user.activo || (user.tokenVersion ?? 0) !== tokenVersion) {
       throw new UnauthorizedException();
     }
+    // Lockout: el segundo factor reusa el contador de intentos fallidos del login.
+    const ahora = new Date();
+    if (user.lockUntil && user.lockUntil > ahora) {
+      throw new UnauthorizedException(
+        'Cuenta bloqueada por intentos fallidos. Intentá de nuevo en unos minutos.',
+      );
+    }
     if (!user.totpHabilitado || !user.totpSecretCifrado) {
       throw new UnauthorizedException('TOTP no configurado');
     }
@@ -152,7 +159,22 @@ export class AuthService {
     const okTotp = authenticator.verify({ token: codigo, secret });
     if (!okTotp) {
       const okRecovery = await this.consumirCodigoRecuperacion(user, codigo);
-      if (!okRecovery) throw new UnauthorizedException('Código inválido');
+      if (!okRecovery) {
+        // Brute-force guard del segundo factor: 5 intentos → 15 min de bloqueo.
+        user.failedLoginAttempts = (user.failedLoginAttempts || 0) + 1;
+        if (user.failedLoginAttempts >= 5) {
+          user.lockUntil = new Date(ahora.getTime() + 15 * 60 * 1000);
+          user.failedLoginAttempts = 0;
+        }
+        await user.save();
+        throw new UnauthorizedException('Código inválido');
+      }
+    }
+    // Éxito: limpiar contador/lock.
+    if (user.failedLoginAttempts > 0 || user.lockUntil) {
+      user.failedLoginAttempts = 0;
+      user.lockUntil = null;
+      await user.save();
     }
     return this.generateAuthResponse(user);
   }
@@ -245,7 +267,7 @@ export class AuthService {
     const user = await this.userModel.findById(userId);
     if (!user) throw new NotFoundException('Usuario no encontrado');
     const temporaryPassword = randomBytes(9).toString('base64url');
-    user.password = await bcrypt.hash(temporaryPassword, 10);
+    user.password = await bcrypt.hash(temporaryPassword, 12);
     user.mustChangePassword = true;
     user.tokenVersion = (user.tokenVersion || 0) + 1;
     await user.save();
@@ -266,7 +288,7 @@ export class AuthService {
       throw new BadRequestException(
         'La nueva contraseña no puede ser igual a la contraseña actual',
       );
-    user.password = await bcrypt.hash(newPassword, 10);
+    user.password = await bcrypt.hash(newPassword, 12);
     user.mustChangePassword = false;
     user.tokenVersion = (user.tokenVersion || 0) + 1;
     await user.save();
@@ -337,7 +359,7 @@ export class AuthService {
       randomBytes(5).toString('hex'),
     );
     user.codigosRecuperacion = await Promise.all(
-      plano.map((c) => bcrypt.hash(c, 10)),
+      plano.map((c) => bcrypt.hash(c, 12)),
     );
     // Recién acá se promueve el provisional al secreto activo.
     user.totpSecretCifrado = user.totpSecretProvisional;

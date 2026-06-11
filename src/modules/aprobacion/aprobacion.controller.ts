@@ -126,11 +126,13 @@ export class AprobacionController {
   }
 
   @Get()
+  @Roles('admin', 'aprobador', 'tesoreria', 'operador', 'consulta')
   findAll() {
     return this.service.findAll();
   }
 
   @Get(':id')
+  @Roles('admin', 'aprobador', 'tesoreria', 'operador', 'consulta')
   findOne(@Param('id') id: string) {
     return this.service.findOne(id);
   }
@@ -154,6 +156,7 @@ export class AprobacionController {
   }
 
   @Get('entidad/:entidad/:entidadId')
+  @Roles('admin', 'aprobador', 'tesoreria', 'operador', 'consulta')
   findByEntity(
     @Param('entidad') entidad: string,
     @Param('entidadId') entidadId: string,

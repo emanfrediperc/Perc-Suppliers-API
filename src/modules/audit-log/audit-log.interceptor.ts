@@ -12,6 +12,23 @@ import {
   extraerUserAgent,
 } from '../../common/utils/request-forense.util';
 
+// Claves cuyo valor NUNCA debe persistirse en el audit log (datos bancarios, credenciales, tokens).
+const CLAVES_SENSIBLES =
+  /password|secret|token|cbu|datosbancarios|codigo|totp|recuperacion|proof/i;
+
+/** Clona el body redactando recursivamente los valores de claves sensibles. */
+function redactarSensible(obj: any): any {
+  if (!obj || typeof obj !== 'object') return obj;
+  if (Array.isArray(obj)) return obj.map(redactarSensible) as unknown;
+  const out: Record<string, any> = {};
+  for (const [k, v] of Object.entries(obj as Record<string, any>)) {
+    if (CLAVES_SENSIBLES.test(k)) out[k] = '[REDACTED]';
+    else if (v && typeof v === 'object') out[k] = redactarSensible(v);
+    else out[k] = v;
+  }
+  return out;
+}
+
 const METHOD_ACTION_MAP: Record<string, string> = {
   POST: 'crear',
   PATCH: 'editar',
@@ -66,7 +83,7 @@ export class AuditLogInterceptor implements NestInterceptor {
               entidadId: resultId,
               cambios:
                 method === 'PATCH' || method === 'PUT'
-                  ? request.body
+                  ? redactarSensible(request.body)
                   : undefined,
               ip: extraerIp(request),
               userAgent: extraerUserAgent(request),
