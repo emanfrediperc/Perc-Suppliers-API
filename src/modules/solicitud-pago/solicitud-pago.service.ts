@@ -5,8 +5,8 @@ import {
   ForbiddenException,
   ConflictException,
 } from '@nestjs/common';
-import { InjectModel } from '@nestjs/mongoose';
-import { Model, Types } from 'mongoose';
+import { InjectModel, InjectConnection } from '@nestjs/mongoose';
+import { Model, Types, Connection, ClientSession } from 'mongoose';
 import {
   SolicitudPago,
   SolicitudPagoDocument,
@@ -63,6 +63,7 @@ export class SolicitudPagoService {
     @InjectModel(OrdenPago.name) private ordenModel: Model<OrdenPagoDocument>,
     @InjectModel(Convenio.name) private convenioModel: Model<ConvenioDocument>,
     @InjectModel(User.name) private userModel: Model<UserDocument>,
+    @InjectConnection() private connection: Connection,
     private storageService: StorageService,
     private pagoCalculator: PagoCalculatorService,
     private emailService: EmailService,
@@ -334,7 +335,8 @@ export class SolicitudPagoService {
       );
     }
 
-    // Adquisición atómica del estado "procesado"
+    // Adquisición atómica del estado "procesado" (gate de doble-submit de ESTA
+    // misma solicitud: dos clicks/tabs sobre el mismo registro).
     const sol = await this.solicitudModel.findOneAndUpdate(
       { _id: new Types.ObjectId(id), estado: current.estado },
       { $set: { estado: 'procesado' } },
@@ -349,82 +351,162 @@ export class SolicitudPagoService {
     const ahora = new Date();
     const userId = new Types.ObjectId(user.userId);
 
-    // Subir comprobantes en paralelo
-    const subidos = await Promise.all(
-      (['perc', 'retenciones'] as TipoComprobante[]).map(async (tipo) => {
-        const file = files[tipo]!;
-        const uploaded = await this.storageService.upload(
-          file,
-          `solicitud-pago/${id}/${tipo}`,
-        );
-        return {
-          tipo,
-          url: uploaded.url,
-          key: uploaded.key,
-          nombre: file.originalname,
-          subidoPor: userId,
-          fecha: ahora,
-        };
-      }),
+    // Pre-check optimista de saldo: evita subir comprobantes si claramente no
+    // alcanza. El guard ATÓMICO real va dentro de la transacción de abajo.
+    const saldoPrelim = await this.saldoDisponibleActual(
+      sol.factura,
+      sol.ordenPago,
     );
-
-    // Calcular comision/descuento via convenio + retenciones.
-    // El campo en el schema Convenio es `empresasProveedoras` (array). Usar el
-    // nombre singular hacía que la query NUNCA matcheara y se perdiera la comision.
-    const convenio = await this.convenioModel
-      .findOne({ empresasProveedoras: sol.empresaProveedora, activo: true })
-      .lean();
-    const calc = this.pagoCalculator.calculate(
-      sol.monto,
-      {
-        retencionIIBB: dto.retencionIIBB || 0,
-        retencionGanancias: dto.retencionGanancias || 0,
-        retencionIVA: dto.retencionIVA || 0,
-        retencionSUSS: dto.retencionSUSS || 0,
-        otrasRetenciones: dto.otrasRetenciones || 0,
-      },
-      convenio
-        ? {
-            comisionPorcentaje: convenio.comisionPorcentaje,
-            descuentoPorcentaje: convenio.descuentoPorcentaje,
-            reglas: convenio.reglas,
-          }
-        : null,
-    );
-
-    // Crear el Pago real
-    const pago = await this.pagoModel.create({
-      factura: sol.factura,
-      ordenPago: sol.ordenPago,
-      fechaPago: ahora,
-      montoBase: sol.monto,
-      retencionIIBB: dto.retencionIIBB || 0,
-      retencionGanancias: dto.retencionGanancias || 0,
-      retencionIVA: dto.retencionIVA || 0,
-      retencionSUSS: dto.retencionSUSS || 0,
-      otrasRetenciones: dto.otrasRetenciones || 0,
-      comision: calc.comision,
-      porcentajeComision: calc.porcentajeComision,
-      descuento: calc.descuento,
-      porcentajeDescuento: calc.porcentajeDescuento,
-      montoNeto: calc.montoNeto,
-      medioPago: sol.medioPago,
-      referenciaPago: dto.referenciaPago,
-      observaciones: dto.observaciones,
-      convenioAplicado: convenio?._id,
-      estado: 'confirmado',
-    });
-
-    if (sol.factura) {
-      await this.recalcFacturaSaldo(sol.factura);
-    } else if (sol.ordenPago) {
-      await this.aplicarPagoAOrden(sol.ordenPago, sol.monto, pago._id as any);
+    if (sol.monto > saldoPrelim) {
+      await this.solicitudModel.updateOne(
+        { _id: sol._id },
+        { $set: { estado: current.estado } },
+      );
+      throw new ConflictException(
+        `El saldo disponible (${saldoPrelim}) ya no cubre el monto de la solicitud (${sol.monto}); otra solicitud se procesó primero.`,
+      );
     }
 
-    // Estado ya fue puesto en 'procesado' arriba, ahora completamos audit
+    // Subir comprobantes a S3 (I/O externo: fuera de la transacción de dinero).
+    // Si falla, revertimos el estado para que la solicitud pueda reintentarse.
+    let subidos: any[];
+    try {
+      subidos = await Promise.all(
+        (['perc', 'retenciones'] as TipoComprobante[]).map(async (tipo) => {
+          const file = files[tipo]!;
+          const uploaded = await this.storageService.upload(
+            file,
+            `solicitud-pago/${id}/${tipo}`,
+          );
+          return {
+            tipo,
+            url: uploaded.url,
+            key: uploaded.key,
+            nombre: file.originalname,
+            subidoPor: userId,
+            fecha: ahora,
+          };
+        }),
+      );
+    } catch (e) {
+      await this.solicitudModel.updateOne(
+        { _id: sol._id },
+        { $set: { estado: current.estado } },
+      );
+      throw e;
+    }
+
+    // #7 doble-pago: el guard de saldo y la generación del Pago + actualización
+    // del saldo van ATÓMICOS, con la LECTURA del saldo ADENTRO de la transacción
+    // (con .session). Dos solicitudes distintas sobre la misma orden/factura
+    // chocan en el write del documento orden/factura → write-conflict → Mongo
+    // serializa, la segunda re-lee el saldo ya actualizado y aborta. Cierra el
+    // sobrepago que el re-check NO transaccional dejaba abierto.
+    const session = await this.connection.startSession();
+    let pago: PagoDocument | undefined;
+    try {
+      await session.withTransaction(async () => {
+        let saldoPendiente: number;
+        if (sol.factura) {
+          const f = await this.facturaModel
+            .findById(sol.factura)
+            .select('saldoPendiente')
+            .session(session);
+          saldoPendiente = f?.saldoPendiente ?? 0;
+        } else {
+          const o = await this.ordenModel
+            .findById(sol.ordenPago)
+            .select('saldoPendiente')
+            .session(session);
+          saldoPendiente = o?.saldoPendiente ?? 0;
+        }
+        if (sol.monto > saldoPendiente) {
+          throw new ConflictException(
+            `El saldo disponible (${saldoPendiente}) ya no cubre el monto de la solicitud (${sol.monto}); otra solicitud se procesó primero.`,
+          );
+        }
+
+        // Calcular comision/descuento via convenio + retenciones.
+        // El campo en el schema Convenio es `empresasProveedoras` (array). Usar el
+        // nombre singular hacía que la query NUNCA matcheara y se perdiera la comision.
+        const convenio = await this.convenioModel
+          .findOne({ empresasProveedoras: sol.empresaProveedora, activo: true })
+          .session(session)
+          .lean();
+        const calc = this.pagoCalculator.calculate(
+          sol.monto,
+          {
+            retencionIIBB: dto.retencionIIBB || 0,
+            retencionGanancias: dto.retencionGanancias || 0,
+            retencionIVA: dto.retencionIVA || 0,
+            retencionSUSS: dto.retencionSUSS || 0,
+            otrasRetenciones: dto.otrasRetenciones || 0,
+          },
+          convenio
+            ? {
+                comisionPorcentaje: convenio.comisionPorcentaje,
+                descuentoPorcentaje: convenio.descuentoPorcentaje,
+                reglas: convenio.reglas,
+              }
+            : null,
+        );
+
+        // Crear el Pago real (dentro de la transacción)
+        const [creado] = await this.pagoModel.create(
+          [
+            {
+              factura: sol.factura,
+              ordenPago: sol.ordenPago,
+              fechaPago: ahora,
+              montoBase: sol.monto,
+              retencionIIBB: dto.retencionIIBB || 0,
+              retencionGanancias: dto.retencionGanancias || 0,
+              retencionIVA: dto.retencionIVA || 0,
+              retencionSUSS: dto.retencionSUSS || 0,
+              otrasRetenciones: dto.otrasRetenciones || 0,
+              comision: calc.comision,
+              porcentajeComision: calc.porcentajeComision,
+              descuento: calc.descuento,
+              porcentajeDescuento: calc.porcentajeDescuento,
+              montoNeto: calc.montoNeto,
+              medioPago: sol.medioPago,
+              referenciaPago: dto.referenciaPago,
+              observaciones: dto.observaciones,
+              convenioAplicado: convenio?._id,
+              estado: 'confirmado',
+            },
+          ],
+          { session },
+        );
+        pago = creado;
+
+        if (sol.factura) {
+          await this.recalcFacturaSaldo(sol.factura, session);
+        } else if (sol.ordenPago) {
+          await this.aplicarPagoAOrden(
+            sol.ordenPago,
+            sol.monto,
+            creado._id as any,
+            session,
+          );
+        }
+      });
+    } catch (e) {
+      // Saldo insuficiente (race) u otro fallo de la transacción: revertir el
+      // estado de la solicitud para que pueda reintentarse.
+      await this.solicitudModel.updateOne(
+        { _id: sol._id },
+        { $set: { estado: current.estado } },
+      );
+      throw e;
+    } finally {
+      await session.endSession();
+    }
+
+    // Audit en la solicitud (fuera de la transacción de dinero).
     sol.procesadoPor = { user: userId, fecha: ahora } as any;
     sol.comprobantes.push(...(subidos as any));
-    sol.pagoGenerado = pago._id as any;
+    sol.pagoGenerado = pago!._id as any;
     await this.pushHistorial(sol, {
       accion: 'procesar',
       usuario: userId,
@@ -552,36 +634,59 @@ export class SolicitudPagoService {
     }
   }
 
-  private async recalcFacturaSaldo(facturaId: any): Promise<void> {
-    const factura = await this.facturaModel.findById(facturaId);
+  /** Saldo pendiente actual (ya neto de pagos aplicados) de la factura u orden. */
+  private async saldoDisponibleActual(facturaId: any, ordenId: any): Promise<number> {
+    if (facturaId) {
+      const f = await this.facturaModel.findById(facturaId).select('saldoPendiente').lean();
+      return f?.saldoPendiente ?? 0;
+    }
+    if (ordenId) {
+      const o = await this.ordenModel.findById(ordenId).select('saldoPendiente').lean();
+      return o?.saldoPendiente ?? 0;
+    }
+    return 0;
+  }
+
+  private async recalcFacturaSaldo(
+    facturaId: any,
+    session?: ClientSession,
+  ): Promise<void> {
+    const factura = await this.facturaModel
+      .findById(facturaId)
+      .session(session ?? null);
     if (!factura) return;
     const pagosActivos = await this.pagoModel
       .find({
         factura: factura._id,
         estado: { $nin: ['anulado', 'rechazado'] },
       })
+      .session(session ?? null)
       .lean();
     const montoPagado = pagosActivos.reduce((sum, p) => sum + p.montoBase, 0);
     factura.montoPagado = montoPagado;
     factura.saldoPendiente = Math.max(0, factura.montoTotal - montoPagado);
     if (factura.saldoPendiente <= 0) factura.estado = 'pagada';
     else if (montoPagado > 0) factura.estado = 'parcial';
-    await factura.save();
+    await factura.save({ session: session ?? undefined });
   }
 
   private async aplicarPagoAOrden(
     ordenId: any,
     monto: number,
     pagoId: Types.ObjectId,
+    session?: ClientSession,
   ): Promise<void> {
-    const orden = await this.ordenModel.findById(ordenId).populate('facturas');
+    const orden = await this.ordenModel
+      .findById(ordenId)
+      .populate('facturas')
+      .session(session ?? null);
     if (!orden) return;
 
     orden.montoPagado = (orden.montoPagado || 0) + monto;
     orden.saldoPendiente = Math.max(0, orden.montoTotal - orden.montoPagado);
     (orden.pagos as any[]).push(pagoId);
     orden.estado = orden.saldoPendiente <= 0 ? 'pagada' : 'parcial';
-    await orden.save();
+    await orden.save({ session: session ?? undefined });
 
     // Distribuir el monto entre las facturas pendientes (más viejas primero)
     let restante = monto;
@@ -606,7 +711,7 @@ export class SolicitudPagoService {
       } else {
         factura.estado = 'parcial';
       }
-      await factura.save();
+      await factura.save({ session: session ?? undefined });
       restante -= aplicar;
     }
   }
