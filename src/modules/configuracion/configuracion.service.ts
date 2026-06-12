@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { BadRequestException, Injectable } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
 import { Configuracion, ConfiguracionDocument } from './schemas/configuracion.schema';
@@ -30,11 +30,53 @@ export class ConfiguracionService {
   }
 
   async set(clave: string, valor: Record<string, any>, descripcion?: string): Promise<ConfiguracionDocument> {
+    this.validarConfigSeguridad(clave, valor);
     return this.model.findOneAndUpdate(
       { clave },
       { valor, ...(descripcion && { descripcion }) },
       { new: true, upsert: true },
     ) as Promise<ConfiguracionDocument>;
+  }
+
+  /**
+   * Valida claves de configuracion sensibles a seguridad. Sin esto, un admin podia
+   * degradar `umbrales_aprobacion` a 0 firmas (o reglas mal formadas) y desactivar el
+   * doble-control de N-firmas globalmente. Piso server-side: aprobaciones >= 1.
+   */
+  private validarConfigSeguridad(clave: string, valor: Record<string, any>): void {
+    if (clave !== 'umbrales_aprobacion') return;
+
+    const montoUmbral = valor?.montoUmbral;
+    if (typeof montoUmbral !== 'number' || !Number.isFinite(montoUmbral) || montoUmbral < 0) {
+      throw new BadRequestException(
+        'umbrales_aprobacion.montoUmbral debe ser un numero >= 0',
+      );
+    }
+
+    const rules = valor?.rules;
+    if (!Array.isArray(rules) || rules.length === 0) {
+      throw new BadRequestException(
+        'umbrales_aprobacion.rules debe ser un array no vacio',
+      );
+    }
+
+    for (const rule of rules) {
+      if (typeof rule?.min !== 'number' || !Number.isFinite(rule.min) || rule.min < 0) {
+        throw new BadRequestException(
+          'umbrales_aprobacion.rules[].min debe ser un numero >= 0',
+        );
+      }
+      if (rule.max !== null && (typeof rule.max !== 'number' || !Number.isFinite(rule.max) || rule.max <= rule.min)) {
+        throw new BadRequestException(
+          'umbrales_aprobacion.rules[].max debe ser null o un numero > min',
+        );
+      }
+      if (!Number.isInteger(rule?.aprobaciones) || rule.aprobaciones < 1) {
+        throw new BadRequestException(
+          'umbrales_aprobacion.rules[].aprobaciones debe ser un entero >= 1 (piso server-side: el doble-control no se puede desactivar)',
+        );
+      }
+    }
   }
 
   async getAll(): Promise<ConfiguracionDocument[]> {
