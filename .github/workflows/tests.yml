@@ -94,13 +94,17 @@ jobs:
 
       - name: Run container + healthcheck /api/docs
         run: |
-          # CBU_ENC_KEY es OBLIGAToria en produccion (fail-closed): la imagen
-          # corre en NODE_ENV=production y se niega a arrancar sin ella para no
-          # guardar el CBU en plaintext. Key dummy de 64 hex solo para el smoke.
+          # La imagen corre en NODE_ENV=production (Dockerfile), lo que activa dos
+          # hardenings fail-closed:
+          #  - CBU_ENC_KEY es OBLIGAToria: sin ella la app no arranca (no guarda el
+          #    CBU en plaintext). Key dummy de 64 hex solo para el smoke.
+          #  - Swagger (/api/docs) NO se monta salvo opt-in explicito. El healthcheck
+          #    pega a /api/docs, asi que lo habilitamos SOLO en este container efimero.
           docker run -d --name api-smoke --network host \
             -e MONGODB_URI="mongodb://localhost:27017/smoke" \
             -e JWT_SECRET="ci-jwt-secret-at-least-32-characters-for-testing-only" \
             -e CBU_ENC_KEY="0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef" \
+            -e SWAGGER_ENABLED=1 \
             -e PORT=3100 \
             perc-api:smoke
 
