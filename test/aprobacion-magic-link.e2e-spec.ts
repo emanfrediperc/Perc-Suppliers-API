@@ -39,7 +39,10 @@ function extractToken(spy: jest.Mock, callIndex = 0): string {
   if (!calls[callIndex]) throw new Error(`EmailService spy: no call at index ${callIndex}`);
   const [, data] = calls[callIndex];
   const url = new URL(data.magicLink);
-  const t = url.searchParams.get('t');
+  // El token viaja en el FRAGMENTO (#t=) por seguridad (no llega al server);
+  // fallback al query (?t=) por compatibilidad con enlaces legacy.
+  const hashParams = new URLSearchParams(url.hash.replace(/^#/, ''));
+  const t = hashParams.get('t') ?? url.searchParams.get('t');
   if (!t) throw new Error('Token no encontrado en magicLink: ' + data.magicLink);
   return t;
 }
@@ -564,7 +567,7 @@ describe('T027 — Rate limit: 11 requests/min al endpoint público → la 11ª 
 
 // ─── T044 — Contexto via token (Scenarios 3 & 17) ────────────────────────────
 
-describe('T044 — Contexto via token (GET contexto-token/:token)', () => {
+describe('T044 — Contexto via token (GET y POST contexto-token)', () => {
   let ctx: AppContext;
 
   beforeAll(async () => {
@@ -593,6 +596,55 @@ describe('T044 — Contexto via token (GET contexto-token/:token)', () => {
     });
     expect(res.body.expiraEn).toBeDefined();
     expect(res.body.fechaSolicitud).toBeDefined();
+  });
+
+  // POST contexto-token: mismo contrato que el GET, pero con el token en el BODY
+  // (no en el path) para no dejarlo en access logs / Referer.
+  it('POST contexto-token — devuelve 200 con el contexto para un token válido (token en body)', async () => {
+    const { rawToken } = await crearPrestamoConAprobacion(ctx);
+
+    const res = await request(ctx.app.getHttpServer())
+      .post('/api/v1/aprobaciones/contexto-token')
+      .send({ token: rawToken })
+      .expect(200);
+
+    expect(res.body).toMatchObject({
+      entidad: 'prestamos',
+      monto: expect.any(Number),
+      aprobadorEmail: expect.stringContaining('@'),
+    });
+  });
+
+  it('POST contexto-token — es idempotente: no consume el token (sigue usable para decidir)', async () => {
+    const { rawToken } = await crearPrestamoConAprobacion(ctx);
+
+    await request(ctx.app.getHttpServer())
+      .post('/api/v1/aprobaciones/contexto-token')
+      .send({ token: rawToken })
+      .expect(200);
+
+    const decisionRes = await request(ctx.app.getHttpServer())
+      .post('/api/v1/aprobaciones/decidir-via-token')
+      .send({ token: rawToken, decision: 'aprobar' })
+      .expect(200);
+
+    expect(decisionRes.body.estadoAprobacion).toBe('aprobada');
+  });
+
+  it('POST contexto-token — devuelve 401 genérico para un token basura', async () => {
+    const res = await request(ctx.app.getHttpServer())
+      .post('/api/v1/aprobaciones/contexto-token')
+      .send({ token: 'token-invalido-basura' })
+      .expect(401);
+
+    expect(res.body.message).toBe('Token inválido o expirado');
+  });
+
+  it('POST contexto-token — devuelve 400 si falta el token en el body', async () => {
+    await request(ctx.app.getHttpServer())
+      .post('/api/v1/aprobaciones/contexto-token')
+      .send({})
+      .expect(400);
   });
 
   // Scenario 3 (continuación): el token sigue siendo válido para decidir después del GET

@@ -187,7 +187,7 @@ export class AprobacionService {
           aprobador.email,
         );
 
-        const magicLink = `${baseUrl}?t=${encodeURIComponent(rawToken)}`;
+        const magicLink = `${baseUrl}#t=${encodeURIComponent(rawToken)}`;
         const expiraEn = new Date(
           Date.now() + ttlHours * 3_600_000,
         ).toLocaleString('es-AR');
@@ -711,7 +711,7 @@ export class AprobacionService {
           aprobadorId,
           aprobador.email,
         );
-        const magicLink = `${baseUrl}?t=${encodeURIComponent(rawToken)}`;
+        const magicLink = `${baseUrl}#t=${encodeURIComponent(rawToken)}`;
         const expiraEn = new Date(
           Date.now() + ttlHours * 3_600_000,
         ).toLocaleString('es-AR');
@@ -851,7 +851,7 @@ export class AprobacionService {
         aprobador.email,
       );
 
-      const magicLink = `${baseUrl}?t=${encodeURIComponent(rawToken)}`;
+      const magicLink = `${baseUrl}#t=${encodeURIComponent(rawToken)}`;
       const expiraEn = new Date(
         Date.now() + ttlHours * 3_600_000,
       ).toLocaleString('es-AR');

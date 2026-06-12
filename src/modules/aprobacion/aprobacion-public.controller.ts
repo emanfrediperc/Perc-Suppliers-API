@@ -14,6 +14,7 @@ import { Throttle } from '@nestjs/throttler';
 import type { Request } from 'express';
 import { ConfigService } from '@nestjs/config';
 import { AprobacionService } from './aprobacion.service';
+import { ContextoTokenDto } from './dto/contexto-token.dto';
 import { DecidirViaTokenDto } from './dto/decidir-via-token.dto';
 import { IniciarStepUpDto } from './dto/iniciar-step-up.dto';
 import { VerificarStepUpDto } from './dto/verificar-step-up.dto';
@@ -83,6 +84,39 @@ export class AprobacionPublicController {
 
     try {
       return await this.service.getContextoToken(token);
+    } catch {
+      throw new UnauthorizedException('Token inválido o expirado');
+    }
+  }
+
+  @Post('contexto-token')
+  // Read-only/idempotente, pero es POST para llevar el token en el BODY → 200 (no 201).
+  @HttpCode(200)
+  @Throttle({ default: { ttl: 60_000, limit: 10 } })
+  @ApiOperation({
+    summary:
+      'Obtener contexto de una aprobación desde un magic-link token (público, read-only)',
+    description:
+      'Equivalente a GET contexto-token/:token pero recibe el token en el BODY para que NO ' +
+      'quede registrado en access logs, historial del navegador ni headers Referer. ' +
+      'Read-only e idempotente. Rate-limited a 10 req/min por IP. ' +
+      'Devuelve 503 si ENABLE_MAGIC_LINK=false. Es el endpoint preferido por el frontend; ' +
+      'el GET se mantiene por compatibilidad con enlaces ya emitidos.',
+  })
+  @ApiResponse({ status: 200, description: 'Contexto de la aprobación' })
+  @ApiResponse({
+    status: 401,
+    description: 'Token inválido o expirado (mensaje genérico)',
+  })
+  @ApiResponse({ status: 429, description: 'Rate limit excedido' })
+  @ApiResponse({ status: 503, description: 'Funcionalidad deshabilitada' })
+  async contextoTokenPost(@Body() dto: ContextoTokenDto) {
+    if (this.configService.get<boolean>('magicLink.enabled') !== true) {
+      throw new ServiceUnavailableException('Funcionalidad deshabilitada');
+    }
+
+    try {
+      return await this.service.getContextoToken(dto.token);
     } catch {
       throw new UnauthorizedException('Token inválido o expirado');
     }
