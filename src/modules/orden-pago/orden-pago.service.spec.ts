@@ -111,6 +111,46 @@ describe('OrdenPagoService', () => {
     });
   });
 
+  describe('update() — mass-assignment de monto/estado/ownership (regresion seguridad)', () => {
+    it('NO permite mutar montoTotal de una orden ya aprobada via PATCH', async () => {
+      const updated: any = { _id: 'orden1', montoTotal: 90000, estado: 'pendiente' };
+      ordenModel.findByIdAndUpdate = jest.fn().mockResolvedValue(updated);
+
+      await service.update('orden1', { montoTotal: 8000000 } as any);
+
+      // El campo montoTotal nunca debe llegar al update (se sanitiza antes)
+      const [, persisted] = ordenModel.findByIdAndUpdate.mock.calls[0];
+      expect(persisted).not.toHaveProperty('montoTotal');
+    });
+
+    it('elimina estado, empresaProveedora, facturas, saldoPendiente y montoPagado del update', async () => {
+      const updated: any = { _id: 'orden1', estado: 'pendiente' };
+      ordenModel.findByIdAndUpdate = jest.fn().mockResolvedValue(updated);
+
+      await service.update('orden1', {
+        montoTotal: 8000000,
+        estado: 'pagada',
+        empresaProveedora: 'otro-prov',
+        facturas: ['f1'],
+        saldoPendiente: 999,
+        montoPagado: -100,
+        moneda: 'USD',
+      } as any);
+
+      const [, persisted] = ordenModel.findByIdAndUpdate.mock.calls[0];
+      for (const campo of ['montoTotal', 'estado', 'empresaProveedora', 'facturas', 'saldoPendiente', 'montoPagado']) {
+        expect(persisted).not.toHaveProperty(campo);
+      }
+      // Los campos seguros si pasan
+      expect(persisted).toHaveProperty('moneda', 'USD');
+    });
+
+    it('lanza NotFound si la orden no existe', async () => {
+      ordenModel.findByIdAndUpdate = jest.fn().mockResolvedValue(null);
+      await expect(service.update('x', { moneda: 'USD' } as any)).rejects.toBeInstanceOf(NotFoundException);
+    });
+  });
+
   describe('pagar() — guards (dentro de la transaccion)', () => {
     beforeEach(() => {
       connection.startSession.mockResolvedValue({

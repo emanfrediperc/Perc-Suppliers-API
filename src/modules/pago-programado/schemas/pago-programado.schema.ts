@@ -38,7 +38,13 @@ export class PagoProgramado {
   @Prop()
   observaciones: string;
 
-  @Prop({ default: 'programado', enum: ['programado', 'ejecutado', 'cancelado', 'fallido'] })
+  // 'esperando_aprobacion' es el estado inicial: el pago programado NO es
+  // ejecutable por el cron hasta que el flujo de aprobacion lo transicione a
+  // 'programado'. 'rechazado' es el estado terminal cuando el aprobador lo niega.
+  @Prop({
+    default: 'esperando_aprobacion',
+    enum: ['esperando_aprobacion', 'programado', 'ejecutado', 'cancelado', 'fallido', 'rechazado'],
+  })
   estado: string;
 
   @Prop()

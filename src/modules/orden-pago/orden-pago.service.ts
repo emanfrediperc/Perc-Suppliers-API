@@ -103,8 +103,31 @@ export class OrdenPagoService {
     return orden;
   }
 
+  // Campos que NUNCA pueden mutarse via PATCH: mueven dinero, cambian el estado
+  // de la maquina de aprobacion o reasignan ownership. El gate de aprobacion
+  // (createAprobacion) corre UNA sola vez en create() sobre el montoTotal; editar
+  // estos campos despues reabriria saldo pagable / firmas sin re-aprobacion.
+  private static readonly CAMPOS_PROTEGIDOS_UPDATE = [
+    'montoTotal',
+    'montoPagado',
+    'saldoPendiente',
+    'estado',
+    'empresaProveedora',
+    'facturas',
+    'pagos',
+    'activo',
+  ];
+
   async update(id: string, dto: UpdateOrdenPagoDto): Promise<OrdenPagoDocument> {
-    const orden = await this.ordenModel.findByIdAndUpdate(id, dto, { new: true });
+    // Defensa en profundidad: aunque UpdateOrdenPagoDto ya no declara campos de
+    // dinero/estado/ownership (no es PartialType del create), eliminamos cualquier
+    // intento de setearlos para cubrir callers in-process que no pasan por el
+    // ValidationPipe. Un cambio de monto debe re-crear la orden (re-gate de aprobacion).
+    const sanitized: Record<string, any> = { ...(dto as any) };
+    for (const campo of OrdenPagoService.CAMPOS_PROTEGIDOS_UPDATE) {
+      delete sanitized[campo];
+    }
+    const orden = await this.ordenModel.findByIdAndUpdate(id, sanitized, { new: true });
     if (!orden) throw new NotFoundException('Orden de pago no encontrada');
     return orden;
   }

@@ -97,8 +97,37 @@ export class PagoService {
     return pago;
   }
 
+  // Campos que NUNCA pueden mutarse via PATCH: alteran el monto pagado / las
+  // retenciones de un Pago ya confirmado sin recalcular los saldos de factura/orden
+  // (descalce contable) y falsean el comprobante. Corregir montos exige anular() +
+  // re-emision por el flujo de aprobacion.
+  private static readonly CAMPOS_PROTEGIDOS_UPDATE = [
+    'montoBase',
+    'montoNeto',
+    'retencionIIBB',
+    'retencionGanancias',
+    'retencionIVA',
+    'retencionSUSS',
+    'otrasRetenciones',
+    'comision',
+    'porcentajeComision',
+    'descuento',
+    'porcentajeDescuento',
+    'estado',
+    'factura',
+    'ordenPago',
+    'convenioAplicado',
+  ];
+
   async update(id: string, dto: UpdatePagoDto): Promise<PagoDocument> {
-    const pago = await this.pagoModel.findByIdAndUpdate(id, dto, { new: true });
+    // Defensa en profundidad: aunque UpdatePagoDto ya no declara campos monetarios
+    // (no es PartialType del create), eliminamos cualquier intento de setearlos para
+    // cubrir callers in-process que no pasan por el ValidationPipe.
+    const sanitized: Record<string, any> = { ...(dto as any) };
+    for (const campo of PagoService.CAMPOS_PROTEGIDOS_UPDATE) {
+      delete sanitized[campo];
+    }
+    const pago = await this.pagoModel.findByIdAndUpdate(id, sanitized, { new: true });
     if (!pago) throw new NotFoundException('Pago no encontrado');
     return pago;
   }

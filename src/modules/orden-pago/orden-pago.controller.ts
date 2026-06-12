@@ -28,8 +28,11 @@ export class OrdenPagoController {
     return this.service.create(dto, { userId: req.user.userId, email: req.user.email });
   }
 
-  @Get() findAll(@Query() query: OrdenPagoQueryDto) { return this.service.findAll(query); }
+  @Get()
+  @Roles('admin', 'tesoreria', 'operador', 'consulta')
+  findAll(@Query() query: OrdenPagoQueryDto) { return this.service.findAll(query); }
   @Get('export')
+  @Roles('admin', 'tesoreria', 'operador', 'consulta')
   async export(@Query() query: OrdenPagoQueryDto, @Query('formato') formato: string, @Res() res: express.Response) {
     const bigQuery = { ...query, page: 1, limit: 10000 };
     const result = await this.service.findAll(bigQuery);
@@ -77,7 +80,9 @@ export class OrdenPagoController {
     return parts.length ? parts.join(' · ') : undefined;
   }
 
-  @Get(':id') findOne(@Param('id') id: string) { return this.service.findOne(id); }
+  @Get(':id')
+  @Roles('admin', 'tesoreria', 'operador', 'consulta')
+  findOne(@Param('id') id: string) { return this.service.findOne(id); }
 
   @Patch(':id')
   @Roles('admin', 'tesoreria')
