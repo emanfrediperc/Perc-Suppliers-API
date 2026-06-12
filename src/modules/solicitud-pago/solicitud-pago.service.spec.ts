@@ -314,6 +314,52 @@ describe('SolicitudPagoService — state machine', () => {
         }),
       ).rejects.toThrow(ConflictException);
     });
+
+    // ── Segregación de funciones (cuatro ojos sobre el flujo de dinero) ──
+    // Regresión del hallazgo: el creador de la solicitud (incl. admin) NO debe
+    // poder aprobarla. Antes del fix, transicion() no comparaba createdBy.user
+    // contra user.userId y un admin podía crear+aprobar+ejecutar+procesar solo.
+    it('bloquea self-approval: el creador NO puede aprobar su propia solicitud', async () => {
+      const sol = makeSolicitud({
+        estado: 'pendiente',
+        createdBy: { user: new Types.ObjectId(userId) },
+      });
+      solicitudModel.findById.mockResolvedValue(sol);
+      solicitudModel.findOneAndUpdate.mockResolvedValue(sol);
+
+      await expect(
+        service.aprobar('507f1f77bcf86cd799439099', undefined, {
+          userId, // mismo actor que creó (createdBy.user)
+          email: '',
+          role: 'admin',
+        }),
+      ).rejects.toThrow(ForbiddenException);
+
+      // El ataque queda cerrado: nunca se transiciona el estado.
+      expect(solicitudModel.findOneAndUpdate).not.toHaveBeenCalled();
+    });
+
+    it('permite aprobar cuando el aprobador es un actor DISTINTO al creador', async () => {
+      const otroCreador = new Types.ObjectId().toString();
+      const sol = makeSolicitud({
+        estado: 'pendiente',
+        createdBy: { user: new Types.ObjectId(otroCreador) },
+      });
+      solicitudModel.findById.mockResolvedValue(sol);
+      solicitudModel.findOneAndUpdate.mockResolvedValue(sol);
+
+      await service.aprobar('507f1f77bcf86cd799439099', undefined, {
+        userId, // distinto de otroCreador
+        email: '',
+        role: 'contabilidad',
+      });
+
+      expect(solicitudModel.findOneAndUpdate).toHaveBeenCalledWith(
+        expect.objectContaining({ estado: 'pendiente' }),
+        expect.objectContaining({ $set: { estado: 'en_proceso' } }),
+        expect.anything(),
+      );
+    });
   });
 
   describe('cancelar / reagendar', () => {

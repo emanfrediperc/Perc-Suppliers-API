@@ -286,6 +286,19 @@ export class SolicitudPagoService {
     motivo: string | undefined,
     user: AuthUser,
   ): Promise<SolicitudPagoDocument> {
+    // Segregación de funciones (control de cuatro ojos sobre el flujo de dinero):
+    // quien creó la solicitud NO puede aprobarla, ni siquiera un admin. Replica
+    // la regla que ya existe en aprobacion.service.ts:265. Se valida ANTES de la
+    // adquisición atómica para no transicionar el estado de una solicitud que el
+    // mismo actor originó.
+    const current = await this.solicitudModel.findById(id);
+    if (!current) throw new NotFoundException('Solicitud no encontrada');
+    if (current.createdBy?.user?.toString() === user.userId) {
+      throw new ForbiddenException(
+        'No puede aprobar su propia solicitud (segregación de funciones)',
+      );
+    }
+
     return this.transicion(id, 'aprobar', 'en_proceso', user, motivo, (doc) => {
       doc.aprobadoPor = {
         user: new Types.ObjectId(user.userId),
