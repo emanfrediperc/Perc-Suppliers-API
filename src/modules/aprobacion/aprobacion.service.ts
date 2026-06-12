@@ -4,6 +4,7 @@ import {
   BadRequestException,
   ForbiddenException,
   UnauthorizedException,
+  ConflictException,
   Logger,
 } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
@@ -531,6 +532,19 @@ export class AprobacionService {
       };
     }
 
+    // #8 — Single-use ATÓMICO del token ANTES de decidir. Bajo concurrencia (doble
+    // submit del deep-link / replay), un único request gana el consume condicional
+    // {usado:false}->{usado:true}; el resto recibe 409. Esto cierra el re-uso del
+    // magic-link, porque el re-check de estado dentro de decidir() NO era atómico.
+    const consumido = await this.tokenService.consumeAtomic(
+      tokenDoc,
+      ip,
+      userAgent,
+    );
+    if (!consumido) {
+      throw new ConflictException('Este enlace de aprobación ya fue utilizado.');
+    }
+
     // Delegar al método decidir existente (evita duplicar lógica de transición de estado).
     // El rastro forense se persiste EN la decisión (sobrevive al TTL del token).
     const aprobacion = await this.decidir(
@@ -540,16 +554,6 @@ export class AprobacionService {
       comentario,
       { ip, userAgent, tokenHash: tokenDoc.tokenHash, geo, ...stepUpForense },
     );
-
-    // Consumir el token después de que la decisión fue registrada con éxito.
-    // Best-effort: la decisión ya está persistida (fuente de verdad) y el re-uso del
-    // token queda bloqueado por el re-check de estado en decidir(); no hacer fallar la
-    // respuesta si el consume falla.
-    await this.tokenService
-      .consume(tokenDoc, ip, userAgent)
-      .catch((e: any) =>
-        this.logger.warn(`consume token best-effort falló: ${e?.message ?? e}`),
-      );
 
     // T021 — Auditar consumo del token (el interceptor global no corre en rutas sin JWT)
     this.auditLogService

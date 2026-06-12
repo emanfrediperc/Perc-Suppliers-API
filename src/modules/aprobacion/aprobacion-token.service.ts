@@ -97,6 +97,36 @@ export class AprobacionTokenService {
   }
 
   /**
+   * Consume el token de forma ATÓMICA (gate de un solo uso bajo concurrencia).
+   * Usa un update condicional {_id, usado:false} -> {usado:true}: si matchedCount es 0,
+   * el token ya estaba usado (otro request concurrente ganó la carrera) y devuelve false.
+   * Reemplaza al read-modify-write de consume() para cerrar el doble-uso del magic-link.
+   */
+  async consumeAtomic(
+    tokenDoc: AprobacionTokenDocument,
+    ip: string,
+    userAgent: string,
+  ): Promise<boolean> {
+    const res = await this.tokenModel.updateOne(
+      { _id: tokenDoc._id, usado: false },
+      { $set: { usado: true, usadoEn: new Date(), ip, userAgent } },
+    );
+    if (res.matchedCount === 0) return false;
+
+    // Invalidar tokens hermanos del mismo (aprobacionId, userId) que sigan pendientes
+    await this.tokenModel.updateMany(
+      {
+        aprobacionId: tokenDoc.aprobacionId,
+        userId: tokenDoc.userId,
+        _id: { $ne: tokenDoc._id },
+        usado: false,
+      },
+      { $set: { usado: true, usadoEn: new Date() } },
+    );
+    return true;
+  }
+
+  /**
    * Invalida todos los tokens pendientes de una aprobación (todos los aprobadores).
    * Usado por el flujo de reenvío antes de emitir tokens de un nuevo ciclo.
    */
