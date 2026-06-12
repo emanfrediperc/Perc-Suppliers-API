@@ -94,7 +94,45 @@ export class FacturaService {
     return factura;
   }
 
+  /**
+   * Campos que NUNCA pueden mutarse via PATCH: definen integridad financiera,
+   * ownership (a quien se le paga) y la semantica del comprobante. Se derivan en
+   * create()/pagar() y solo cambian por flujos controlados. El UpdateFacturaDto
+   * ya no los expone (whitelist los rechaza en el borde), pero este guard es
+   * defensa en profundidad contra regresiones del DTO o llamadas internas.
+   */
+  private static readonly CAMPOS_INMUTABLES = [
+    'numero',
+    'tipo',
+    'montoNeto',
+    'montoIva',
+    'montoTotal',
+    'moneda',
+    'empresaProveedora',
+    'empresaCliente',
+    'ordenPago',
+    'facturaRelacionada',
+    'estado',
+    'montoPagado',
+    'saldoPendiente',
+    'pagos',
+    'activo',
+    'alertas',
+  ];
+
   async update(id: string, dto: UpdateFacturaDto) {
+    // Defensa en profundidad: rechazar cualquier campo financiero/ownership/tipo
+    // aunque el DTO/whitelist sea bypasseado en el futuro. No se recalculan
+    // invariantes porque estos campos directamente no se aceptan en el update.
+    const inmutableEnviado = FacturaService.CAMPOS_INMUTABLES.find(
+      (campo) => Object.prototype.hasOwnProperty.call(dto, campo),
+    );
+    if (inmutableEnviado) {
+      throw new BadRequestException(
+        `El campo "${inmutableEnviado}" no puede modificarse via update de factura`,
+      );
+    }
+
     await this.assertArchivoKeyValido(dto.archivoKey, id);
     const factura = await this.facturaModel.findByIdAndUpdate(id, dto, { new: true });
     if (!factura) throw new NotFoundException('Factura no encontrada');
