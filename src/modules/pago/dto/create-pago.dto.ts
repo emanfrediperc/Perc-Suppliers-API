@@ -16,5 +16,6 @@ export class CreatePagoDto {
   @ApiPropertyOptional() @IsOptional() @IsString() referenciaPago?: string;
   @ApiPropertyOptional() @IsOptional() @IsString() observaciones?: string;
   @ApiPropertyOptional() @IsOptional() @IsString() convenioAplicado?: string;
-  @ApiPropertyOptional() @IsOptional() @IsString() estado?: string;
+  // `estado` removido a proposito: campo de servidor. La maquina de estados se
+  // transiciona solo via el listener de aprobacion / metodos internos (no por API).
 }

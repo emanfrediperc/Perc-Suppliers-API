@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, BadRequestException } from '@nestjs/common';
 
 export interface RetencionesInput {
   retencionIIBB?: number;
@@ -45,6 +45,11 @@ export class PagoCalculatorService {
     const totalRetenciones = (retenciones.retencionIIBB || 0) + (retenciones.retencionGanancias || 0) +
       (retenciones.retencionIVA || 0) + (retenciones.retencionSUSS || 0) + (retenciones.otrasRetenciones || 0);
     const montoNeto = montoBase - totalRetenciones - comision - descuento;
+    if (montoNeto < 0) {
+      throw new BadRequestException(
+        `El monto neto resultante es negativo ($${montoNeto.toFixed(2)}): la suma de retenciones ($${totalRetenciones.toFixed(2)}), comisión ($${comision.toFixed(2)}) y descuento ($${descuento.toFixed(2)}) supera el monto base ($${montoBase.toFixed(2)}).`,
+      );
+    }
 
     return { comision, porcentajeComision, descuento, porcentajeDescuento, totalRetenciones, montoNeto };
   }

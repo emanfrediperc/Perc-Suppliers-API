@@ -132,7 +132,22 @@ export class OrdenPagoService {
           .populate('facturas')
           .session(session);
         if (!orden) throw new NotFoundException('Orden de pago no encontrada');
-        if (orden.estado === 'pagada') throw new BadRequestException('La orden ya esta completamente pagada');
+        // Solo se puede pagar una orden en estado operativo APROBADO.
+        // Bloquea 'esperando_aprobacion' (gate de aprobacion sin votar),
+        // 'anulada' (rechazada por el aprobador) y 'pagada' (ya saldada).
+        const ESTADOS_PAGABLES = ['pendiente', 'parcial'];
+        if (!ESTADOS_PAGABLES.includes(orden.estado)) {
+          throw new BadRequestException(
+            orden.estado === 'pagada'
+              ? 'La orden ya esta completamente pagada'
+              : `La orden no esta en un estado pagable (estado actual: "${orden.estado}"). Debe estar aprobada (pendiente o parcial).`,
+          );
+        }
+        // Defensa en profundidad: el cron de pagos programados construye el DTO
+        // sin pasar por el ValidationPipe, así que validamos el monto en runtime.
+        if (!(dto.montoBase > 0)) {
+          throw new BadRequestException('El monto base debe ser positivo');
+        }
 
         const saldoPendiente = orden.montoTotal - (orden.montoPagado || 0);
         if (dto.montoBase > saldoPendiente) {

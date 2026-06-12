@@ -368,9 +368,11 @@ export class SolicitudPagoService {
       }),
     );
 
-    // Calcular comision/descuento via convenio + retenciones
+    // Calcular comision/descuento via convenio + retenciones.
+    // El campo en el schema Convenio es `empresasProveedoras` (array). Usar el
+    // nombre singular hacía que la query NUNCA matcheara y se perdiera la comision.
     const convenio = await this.convenioModel
-      .findOne({ empresaProveedora: sol.empresaProveedora, activo: true })
+      .findOne({ empresasProveedoras: sol.empresaProveedora, activo: true })
       .lean();
     const calc = this.pagoCalculator.calculate(
       sol.monto,

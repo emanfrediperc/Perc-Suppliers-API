@@ -101,4 +101,27 @@ describe('PagoCalculatorService.calculate()', () => {
       expect(r.montoNeto).toBeCloseTo(86_000, 2);
     });
   });
+
+  describe('guard: montoNeto no puede ser negativo', () => {
+    it('lanza si la suma de retenciones supera el montoBase', () => {
+      expect(() =>
+        svc.calculate(100_000, { retencionGanancias: 150_000 }),
+      ).toThrow(/monto neto/i);
+    });
+
+    it('lanza si retenciones + comision + descuento superan el montoBase', () => {
+      expect(() =>
+        svc.calculate(
+          10_000,
+          { retencionIIBB: 9000, retencionIVA: 2000 },
+          { comisionPorcentaje: 10, descuentoPorcentaje: 5 },
+        ),
+      ).toThrow();
+    });
+
+    it('montoNeto exactamente 0 es válido (no lanza)', () => {
+      const r = svc.calculate(10_000, { retencionIIBB: 10_000 });
+      expect(r.montoNeto).toBe(0);
+    });
+  });
 });
