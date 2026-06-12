@@ -1,3 +1,4 @@
+import { Logger } from '@nestjs/common';
 import {
   cifrarCbu,
   descifrarCbu,
@@ -6,6 +7,7 @@ import {
   enmascararEmpresaBancarios,
   prepararEmpresaBancarios,
   puedeVerCbu,
+  CBU_INVALIDO,
 } from './datos-bancarios.util';
 
 const KEY = 'a'.repeat(64); // 32 bytes hex
@@ -76,6 +78,79 @@ describe('datos-bancarios util', () => {
       expect(
         prepararEmpresaBancarios(emp(), 'consulta').datosBancarios.cbu,
       ).toBe('****6789');
+    });
+
+    // REGRESIÓN — Finding "descifrarCbu() ignora el fallo de autenticación de
+    // AES-256-GCM y devuelve el ciphertext crudo". El authTag de GCM es la única
+    // garantía de integridad at-rest del CBU: un valor manipulado NO debe devolverse
+    // crudo (eso anula la detección de tampering y filtra el blob cifrado al reporte).
+    describe('integridad / authTag inválido (anti-tampering)', () => {
+      let errorSpy: jest.SpyInstance;
+
+      beforeEach(() => {
+        errorSpy = jest
+          .spyOn(Logger.prototype, 'error')
+          .mockImplementation(() => undefined);
+      });
+
+      afterEach(() => {
+        errorSpy.mockRestore();
+      });
+
+      function tamperCiphertext(enc: string): string {
+        const [iv, tag, data] = enc.split(':');
+        // Flip de los últimos bytes del ciphertext: rompe el authTag de GCM.
+        const ultimo = data.slice(-2) === '00' ? '11' : '00';
+        return `${iv}:${tag}:${data.slice(0, -2)}${ultimo}`;
+      }
+
+      it('NO devuelve el ciphertext crudo cuando el authTag no valida', () => {
+        const enc = cifrarCbu(CBU)!;
+        const tampered = tamperCiphertext(enc);
+
+        const out = descifrarCbu(tampered);
+
+        // El ataque ya NO funciona: no se filtra el blob cifrado.
+        expect(out).not.toBe(tampered);
+        expect(out).not.toContain(':');
+        // No devuelve el CBU original (no tiene la posibilidad de reconstruirlo).
+        expect(out).not.toBe(CBU);
+        // Devuelve el sentinel explícito, no basura hexadecimal.
+        expect(out).toBe(CBU_INVALIDO);
+      });
+
+      it('loguea un evento de seguridad ante manipulación del CBU', () => {
+        const tampered = tamperCiphertext(cifrarCbu(CBU)!);
+        descifrarCbu(tampered);
+        expect(errorSpy).toHaveBeenCalledTimes(1);
+        expect(String(errorSpy.mock.calls[0][0])).toMatch(/authTag/i);
+      });
+
+      it('falla con la key equivocada sin devolver el ciphertext', () => {
+        const enc = cifrarCbu(CBU)!;
+        // Cambiar la key: descifrar lanza por authTag inválido.
+        process.env.CBU_ENC_KEY = 'b'.repeat(64);
+        const out = descifrarCbu(enc);
+        expect(out).toBe(CBU_INVALIDO);
+        expect(out).not.toBe(enc);
+      });
+
+      it('revelarEmpresaBancarios devuelve el sentinel, no el blob, ante tampering', () => {
+        const tampered = tamperCiphertext(cifrarCbu(CBU)!);
+        const emp = { datosBancarios: { cbu: tampered, banco: 'X' } };
+        expect(revelarEmpresaBancarios(emp).datosBancarios.cbu).toBe(
+          CBU_INVALIDO,
+        );
+      });
+
+      it('enmascararEmpresaBancarios propaga el sentinel sin enmascararlo (no genera basura)', () => {
+        const tampered = tamperCiphertext(cifrarCbu(CBU)!);
+        const emp = { datosBancarios: { cbu: tampered } };
+        const out = enmascararEmpresaBancarios(emp).datosBancarios.cbu;
+        expect(out).toBe(CBU_INVALIDO);
+        // No filtra los "últimos 4" de un blob hex como si fuera un CBU.
+        expect(out).not.toMatch(/^\*\*\*\*/);
+      });
     });
   });
 

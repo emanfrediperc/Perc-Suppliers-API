@@ -1,15 +1,27 @@
-import { IsOptional, IsPositive, Min, MaxLength, Matches, IsIn } from 'class-validator';
+import { IsOptional, IsInt, Min, Max, MaxLength, Matches, IsIn } from 'class-validator';
+import { Type } from 'class-transformer';
 import { ApiPropertyOptional } from '@nestjs/swagger';
+
+// Tope de filas por pagina que un cliente puede pedir. Los endpoints /export que
+// legitimamente necesitan mas filas sobreescriben `limit` server-side DESPUES de
+// validar el DTO (ver factura/audit-log controllers), por lo que este @Max no los
+// limita: solo acota lo que un usuario puede pedir directo via querystring.
+export const MAX_PAGINATION_LIMIT = 100;
 
 export class PaginationQueryDto {
   @ApiPropertyOptional({ default: 1 })
   @IsOptional()
-  @IsPositive()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
   page: number = 1;
 
-  @ApiPropertyOptional({ default: 20 })
+  @ApiPropertyOptional({ default: 20, maximum: MAX_PAGINATION_LIMIT })
   @IsOptional()
+  @Type(() => Number)
+  @IsInt()
   @Min(1)
+  @Max(MAX_PAGINATION_LIMIT)
   limit: number = 20;
 
   @ApiPropertyOptional()

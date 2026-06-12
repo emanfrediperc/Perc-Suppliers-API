@@ -15,6 +15,7 @@ import {
   ForbiddenException,
   BadRequestException,
   NotFoundException,
+  UnauthorizedException,
 } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { ConfigService } from '@nestjs/config';
@@ -464,6 +465,108 @@ describe('AprobacionService', () => {
         APROBACION_RESUELTA,
         expect.objectContaining({ estado: 'aprobada' }),
       );
+    });
+
+    // ─── REGRESIÓN #2: step-up enforced TAMBIÉN en el path JWT ────────────────
+
+    it('SEGURIDAD: con step-up requerido y SIN proof, el path JWT NIEGA la decisión', async () => {
+      // Habilita step-up por monto: el path JWT ya no puede saltearlo.
+      configServiceMock.get.mockResolvedValue({
+        habilitado: true,
+        montoUmbral: 1_000_000,
+        factorPorDefecto: 'totp',
+      });
+      const doc = buildAprobacionDoc({
+        estado: 'pendiente',
+        createdBy: 'creator',
+        aprobadores: [],
+        monto: 5_000_000,
+      });
+      aprobacionModelMock.findById.mockResolvedValue(doc);
+
+      await expect(
+        // sin desafioId/stepUpProof → debe rechazar
+        service.decidir('aprobacion-id-001', aprobador, 'aprobada'),
+      ).rejects.toThrow(UnauthorizedException);
+      // NO se aprobó ni se persistió la decisión
+      expect(doc.estado).toBe('pendiente');
+      expect(doc.save).not.toHaveBeenCalled();
+    });
+
+    it('SEGURIDAD: path JWT aprueba sólo si valida+consume el proof de step-up', async () => {
+      configServiceMock.get.mockResolvedValue({
+        habilitado: true,
+        montoUmbral: 1_000_000,
+        factorPorDefecto: 'totp',
+      });
+      const doc = buildAprobacionDoc({
+        estado: 'pendiente',
+        createdBy: 'creator',
+        aprobadores: [],
+        monto: 5_000_000,
+        aprobacionesRequeridas: 1,
+      });
+      aprobacionModelMock.findById.mockResolvedValue(doc);
+      const stepUpService = service['stepUpService'] as any;
+      stepUpService.validarYConsumirProof.mockResolvedValue({
+        factorUsado: 'totp',
+        desafioId: 'des-1',
+      });
+
+      await service.decidir(
+        'aprobacion-id-001',
+        aprobador,
+        'aprobada',
+        undefined,
+        undefined,
+        { desafioId: 'des-1', stepUpProof: 'proof-ok' },
+      );
+
+      // El proof se valida y consume scoped a (aprobacionId, userId del JWT)
+      expect(stepUpService.validarYConsumirProof).toHaveBeenCalledWith(
+        'aprobacion-id-001',
+        aprobador.userId,
+        'des-1',
+        'proof-ok',
+      );
+      expect(doc.estado).toBe('aprobada');
+      // El forense de la decisión deja registro de que step-up fue satisfecho
+      expect(doc.aprobadores[doc.aprobadores.length - 1]).toMatchObject({
+        stepUpRequerido: true,
+        stepUpSatisfecho: true,
+        factorStepUp: 'totp',
+      });
+    });
+
+    it('SEGURIDAD: path JWT con proof inválido (StepUpService lanza) NO aprueba', async () => {
+      configServiceMock.get.mockResolvedValue({
+        habilitado: true,
+        montoUmbral: 1_000_000,
+        factorPorDefecto: 'totp',
+      });
+      const doc = buildAprobacionDoc({
+        estado: 'pendiente',
+        createdBy: 'creator',
+        aprobadores: [],
+        monto: 5_000_000,
+      });
+      aprobacionModelMock.findById.mockResolvedValue(doc);
+      const stepUpService = service['stepUpService'] as any;
+      stepUpService.validarYConsumirProof.mockRejectedValue(
+        new UnauthorizedException('Step-up requerido o inválido'),
+      );
+
+      await expect(
+        service.decidir(
+          'aprobacion-id-001',
+          aprobador,
+          'aprobada',
+          undefined,
+          undefined,
+          { desafioId: 'des-1', stepUpProof: 'proof-malo' },
+        ),
+      ).rejects.toThrow(UnauthorizedException);
+      expect(doc.estado).toBe('pendiente');
     });
   });
 

@@ -4,6 +4,7 @@ import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../../auth/guards/roles.guard';
 import { Roles } from '../../auth/decorators/roles.decorator';
 import { ConfiguracionService } from './configuracion.service';
+import { SetConfiguracionDto } from './dto/set-configuracion.dto';
 
 @ApiTags('Configuracion')
 @ApiBearerAuth()
@@ -26,7 +27,7 @@ export class ConfiguracionController {
 
   @Put(':clave')
   @Roles('admin')
-  set(@Param('clave') clave: string, @Body() body: { valor: Record<string, any>; descripcion?: string }) {
+  set(@Param('clave') clave: string, @Body() body: SetConfiguracionDto) {
     return this.service.set(clave, body.valor, body.descripcion);
   }
 }

@@ -4,6 +4,7 @@ import {
   BadRequestException,
   ForbiddenException,
   UnauthorizedException,
+  ConflictException,
   Logger,
 } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
@@ -186,7 +187,7 @@ export class AprobacionService {
           aprobador.email,
         );
 
-        const magicLink = `${baseUrl}?t=${encodeURIComponent(rawToken)}`;
+        const magicLink = `${baseUrl}#t=${encodeURIComponent(rawToken)}`;
         const expiraEn = new Date(
           Date.now() + ttlHours * 3_600_000,
         ).toLocaleString('es-AR');
@@ -255,6 +256,13 @@ export class AprobacionService {
     decision: string,
     comentario?: string,
     forense?: DatosForenses,
+    stepUp?: {
+      /** El proof ya fue validado/consumido aguas arriba (path magic-link). */
+      yaValidado?: boolean;
+      /** Path JWT: proof a validar+consumir acá, scoped a (aprobacionId, userId). */
+      desafioId?: string;
+      stepUpProof?: string;
+    },
   ) {
     const aprobacion = await this.aprobacionModel.findById(id);
     if (!aprobacion) throw new NotFoundException('Aprobacion no encontrada');
@@ -263,6 +271,39 @@ export class AprobacionService {
 
     if (aprobacion.createdBy === user.userId) {
       throw new BadRequestException('No puede aprobar su propia solicitud');
+    }
+
+    // ENFORCEMENT step-up (server-side, AMBOS canales). El path magic-link valida
+    // el proof antes de llamar acá (yaValidado=true). El path JWT NO traía ningún
+    // segundo factor: el control era trivialmente evitable eligiendo el canal UI.
+    // Ahora, si la aprobación exige step-up y no llega un proof ya validado, lo
+    // exigimos y consumimos también acá, scoped al userId del JWT.
+    // Sólo gatea el acto de APROBAR (autoriza el movimiento de dinero); un rechazo
+    // no necesita segundo factor.
+    const stepUpReq =
+      decision === 'aprobada'
+        ? await this.requiereStepUp(aprobacion)
+        : { requerido: false };
+    let stepUpForenseExtra: Partial<DatosForenses> = {};
+    if (stepUpReq.requerido && !stepUp?.yaValidado) {
+      if (!stepUp?.stepUpProof || !stepUp?.desafioId) {
+        throw new UnauthorizedException('Step-up requerido');
+      }
+      const proof = await this.stepUpService.validarYConsumirProof(
+        id,
+        user.userId,
+        stepUp.desafioId,
+        stepUp.stepUpProof,
+      );
+      stepUpForenseExtra = {
+        stepUpRequerido: true,
+        stepUpSatisfecho: true,
+        factorStepUp: proof.factorUsado ?? undefined,
+        desafioId: proof.desafioId,
+      };
+    }
+    if (stepUpForenseExtra.stepUpSatisfecho) {
+      forense = { ...forense, ...stepUpForenseExtra };
     }
 
     const alreadyDecided = aprobacion.aprobadores.find(
@@ -531,25 +572,31 @@ export class AprobacionService {
       };
     }
 
+    // #8 — Single-use ATÓMICO del token ANTES de decidir. Bajo concurrencia (doble
+    // submit del deep-link / replay), un único request gana el consume condicional
+    // {usado:false}->{usado:true}; el resto recibe 409. Esto cierra el re-uso del
+    // magic-link, porque el re-check de estado dentro de decidir() NO era atómico.
+    const consumido = await this.tokenService.consumeAtomic(
+      tokenDoc,
+      ip,
+      userAgent,
+    );
+    if (!consumido) {
+      throw new ConflictException('Este enlace de aprobación ya fue utilizado.');
+    }
+
     // Delegar al método decidir existente (evita duplicar lógica de transición de estado).
     // El rastro forense se persiste EN la decisión (sobrevive al TTL del token).
+    // yaValidado: true → el proof ya fue validado/consumido arriba en este path;
+    // decidir() no debe re-exigirlo, pero SÍ enforcea el step-up en el path JWT.
     const aprobacion = await this.decidir(
       aprobacionIdStr,
       { userId, email: user.email, nombre: user.nombre },
       decisionInterna,
       comentario,
       { ip, userAgent, tokenHash: tokenDoc.tokenHash, geo, ...stepUpForense },
+      { yaValidado: true },
     );
-
-    // Consumir el token después de que la decisión fue registrada con éxito.
-    // Best-effort: la decisión ya está persistida (fuente de verdad) y el re-uso del
-    // token queda bloqueado por el re-check de estado en decidir(); no hacer fallar la
-    // respuesta si el consume falla.
-    await this.tokenService
-      .consume(tokenDoc, ip, userAgent)
-      .catch((e: any) =>
-        this.logger.warn(`consume token best-effort falló: ${e?.message ?? e}`),
-      );
 
     // T021 — Auditar consumo del token (el interceptor global no corre en rutas sin JWT)
     this.auditLogService
@@ -664,7 +711,7 @@ export class AprobacionService {
           aprobadorId,
           aprobador.email,
         );
-        const magicLink = `${baseUrl}?t=${encodeURIComponent(rawToken)}`;
+        const magicLink = `${baseUrl}#t=${encodeURIComponent(rawToken)}`;
         const expiraEn = new Date(
           Date.now() + ttlHours * 3_600_000,
         ).toLocaleString('es-AR');
@@ -804,7 +851,7 @@ export class AprobacionService {
         aprobador.email,
       );
 
-      const magicLink = `${baseUrl}?t=${encodeURIComponent(rawToken)}`;
+      const magicLink = `${baseUrl}#t=${encodeURIComponent(rawToken)}`;
       const expiraEn = new Date(
         Date.now() + ttlHours * 3_600_000,
       ).toLocaleString('es-AR');
@@ -937,6 +984,57 @@ export class AprobacionService {
   ) {
     return this.stepUpService.verificarDesafio(
       rawToken,
+      desafioId,
+      secreto,
+      ip,
+      userAgent,
+    );
+  }
+
+  /**
+   * Inicia un desafío de step-up para el path JWT (aprobador autenticado por Bearer).
+   * Resuelve el factor según config + enrolamiento. Lanza si la aprobación no
+   * requiere segundo factor o si el solicitante es el creador (no puede auto-aprobar).
+   */
+  async iniciarStepUpJwt(
+    aprobacionId: string,
+    user: { userId: string; email: string },
+    ip: string,
+    userAgent: string,
+  ) {
+    const aprobacion = await this.aprobacionModel.findById(aprobacionId);
+    if (!aprobacion) throw new NotFoundException('Aprobacion no encontrada');
+    if (aprobacion.createdBy === user.userId) {
+      throw new BadRequestException('No puede aprobar su propia solicitud');
+    }
+    const { requerido, factor } = await this.requiereStepUp(aprobacion);
+    if (!requerido) {
+      throw new BadRequestException(
+        'Esta aprobación no requiere segundo factor',
+      );
+    }
+    return this.stepUpService.iniciarDesafioJwt(
+      aprobacionId,
+      user.userId,
+      user.email,
+      factor,
+      ip,
+      userAgent,
+    );
+  }
+
+  /** Verifica el segundo factor (path JWT) y devuelve el proof single-use. */
+  async verificarStepUpJwt(
+    aprobacionId: string,
+    user: { userId: string },
+    desafioId: string,
+    secreto: string,
+    ip: string,
+    userAgent: string,
+  ) {
+    return this.stepUpService.verificarDesafioJwt(
+      aprobacionId,
+      user.userId,
       desafioId,
       secreto,
       ip,

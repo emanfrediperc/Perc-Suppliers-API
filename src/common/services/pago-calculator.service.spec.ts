@@ -101,4 +101,96 @@ describe('PagoCalculatorService.calculate()', () => {
       expect(r.montoNeto).toBeCloseTo(86_000, 2);
     });
   });
+
+  describe('guard: montoNeto no puede ser negativo', () => {
+    it('lanza si la suma de retenciones supera el montoBase', () => {
+      expect(() =>
+        svc.calculate(100_000, { retencionGanancias: 150_000 }),
+      ).toThrow(/monto neto/i);
+    });
+
+    it('lanza si retenciones + comision + descuento superan el montoBase', () => {
+      expect(() =>
+        svc.calculate(
+          10_000,
+          { retencionIIBB: 9000, retencionIVA: 2000 },
+          { comisionPorcentaje: 10, descuentoPorcentaje: 5 },
+        ),
+      ).toThrow();
+    });
+
+    it('montoNeto exactamente 0 es válido (no lanza)', () => {
+      const r = svc.calculate(10_000, { retencionIIBB: 10_000 });
+      expect(r.montoNeto).toBe(0);
+    });
+  });
+
+  // Regresión: PagoCalculator no acota montoNeto <= montoBase.
+  // comision/descuento con porcentaje negativo SUMAban al neto y sobrepagaban al proveedor.
+  describe('guard: montoNeto no puede superar montoBase (anti-sobrepago)', () => {
+    it('rechaza descuentoPorcentaje negativo (exploit del convenio comprometido)', () => {
+      // Ataque original: PATCH /convenios/:id { descuentoPorcentaje: -50 }
+      // descuento = 1.000.000 * (-50)/100 = -500.000 => neto = 1.500.000 (sobrepago de 1,5M)
+      expect(() =>
+        svc.calculate(1_000_000, {}, { comisionPorcentaje: 0, descuentoPorcentaje: -50 }),
+      ).toThrow(/descuento.*fuera de rango/i);
+    });
+
+    it('rechaza comisionPorcentaje negativo', () => {
+      expect(() =>
+        svc.calculate(1_000_000, {}, { comisionPorcentaje: -20, descuentoPorcentaje: 0 }),
+      ).toThrow(/comisión.*fuera de rango/i);
+    });
+
+    it('rechaza comisionPorcentaje > 100', () => {
+      expect(() =>
+        svc.calculate(100_000, {}, { comisionPorcentaje: 150, descuentoPorcentaje: 0 }),
+      ).toThrow(/comisión.*fuera de rango/i);
+    });
+
+    it('rechaza descuentoPorcentaje > 100', () => {
+      expect(() =>
+        svc.calculate(100_000, {}, { comisionPorcentaje: 0, descuentoPorcentaje: 250 }),
+      ).toThrow(/descuento.*fuera de rango/i);
+    });
+
+    it('rechaza comisionMinima negativa (sumaría al neto vía clamp)', () => {
+      expect(() =>
+        svc.calculate(100_000, {}, {
+          comisionPorcentaje: 5,
+          descuentoPorcentaje: 0,
+          reglas: { comisionMinima: -1_000_000, comisionMaxima: null },
+        }),
+      ).toThrow(/mínima.*no puede ser negativa/i);
+    });
+
+    it('rechaza comisionMaxima negativa', () => {
+      expect(() =>
+        svc.calculate(100_000, {}, {
+          comisionPorcentaje: 5,
+          descuentoPorcentaje: 0,
+          reglas: { comisionMinima: null, comisionMaxima: -50 },
+        }),
+      ).toThrow(/máxima.*no puede ser negativa/i);
+    });
+
+    it('rechaza retenciones negativas que inflarían el neto sobre la base', () => {
+      // retención negativa => totalRetenciones negativo => neto > base
+      expect(() =>
+        svc.calculate(100_000, { retencionIIBB: -50_000 }),
+      ).toThrow(/supera el monto base/i);
+    });
+
+    it('rechaza montoBase negativo', () => {
+      expect(() =>
+        svc.calculate(-100_000, {}),
+      ).toThrow(/monto base no puede ser negativo/i);
+    });
+
+    it('caso límite válido: porcentajes en el borde [0,100] no lanzan', () => {
+      const r = svc.calculate(100_000, {}, { comisionPorcentaje: 100, descuentoPorcentaje: 0 });
+      expect(r.comision).toBeCloseTo(100_000, 2);
+      expect(r.montoNeto).toBeCloseTo(0, 2);
+    });
+  });
 });

@@ -39,6 +39,7 @@ export class FacturaService {
   ) {}
 
   async create(dto: CreateFacturaDto) {
+    await this.assertArchivoKeyValido(dto.archivoKey);
     const isNotaCredito = dto.tipo.startsWith('NC-');
     const saldoPendiente = isNotaCredito ? 0 : dto.montoTotal;
     await this.bloquearSiApocrifo(dto.empresaProveedora);
@@ -93,10 +94,71 @@ export class FacturaService {
     return factura;
   }
 
+  /**
+   * Campos que NUNCA pueden mutarse via PATCH: definen integridad financiera,
+   * ownership (a quien se le paga) y la semantica del comprobante. Se derivan en
+   * create()/pagar() y solo cambian por flujos controlados. El UpdateFacturaDto
+   * ya no los expone (whitelist los rechaza en el borde), pero este guard es
+   * defensa en profundidad contra regresiones del DTO o llamadas internas.
+   */
+  private static readonly CAMPOS_INMUTABLES = [
+    'numero',
+    'tipo',
+    'montoNeto',
+    'montoIva',
+    'montoTotal',
+    'moneda',
+    'empresaProveedora',
+    'empresaCliente',
+    'ordenPago',
+    'facturaRelacionada',
+    'estado',
+    'montoPagado',
+    'saldoPendiente',
+    'pagos',
+    'activo',
+    'alertas',
+  ];
+
   async update(id: string, dto: UpdateFacturaDto) {
+    // Defensa en profundidad: rechazar cualquier campo financiero/ownership/tipo
+    // aunque el DTO/whitelist sea bypasseado en el futuro. No se recalculan
+    // invariantes porque estos campos directamente no se aceptan en el update.
+    const inmutableEnviado = FacturaService.CAMPOS_INMUTABLES.find(
+      (campo) => Object.prototype.hasOwnProperty.call(dto, campo),
+    );
+    if (inmutableEnviado) {
+      throw new BadRequestException(
+        `El campo "${inmutableEnviado}" no puede modificarse via update de factura`,
+      );
+    }
+
+    await this.assertArchivoKeyValido(dto.archivoKey, id);
     const factura = await this.facturaModel.findByIdAndUpdate(id, dto, { new: true });
     if (!factura) throw new NotFoundException('Factura no encontrada');
     return factura;
+  }
+
+  /**
+   * Valida un archivoKey recibido del cliente antes de persistirlo. Evita el IDOR
+   * del endpoint preview: sin esto, el cliente podía setear archivoKey al objeto S3
+   * de OTRA factura (el único control era startsWith('facturas/')) y firmarlo.
+   * 1) Debe matchear EXACTAMENTE el patrón que genera StorageService:
+   *    `facturas/<timestamp>-<safeName>` (safeName ya sanitizado, sin '..').
+   * 2) No puede pertenecer a otra factura (apropiación de archivo ajeno).
+   */
+  private async assertArchivoKeyValido(archivoKey: string | undefined, facturaIdActual?: string): Promise<void> {
+    if (!archivoKey) return;
+    const PATRON_KEY = /^facturas\/\d+-[A-Za-z0-9._-]+$/;
+    if (!PATRON_KEY.test(archivoKey)) {
+      throw new BadRequestException('archivoKey inválido');
+    }
+    const filtro: any = { archivoKey };
+    if (facturaIdActual) filtro._id = { $ne: new Types.ObjectId(facturaIdActual) };
+    const otra = await this.facturaModel.findOne(filtro).select('_id').lean();
+    if (otra) {
+      throw new BadRequestException('El archivo indicado ya pertenece a otra factura');
+    }
   }
 
   async deactivate(id: string) {

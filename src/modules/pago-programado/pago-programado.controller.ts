@@ -35,10 +35,11 @@ export class PagoProgramadoController {
   @Post()
   @Roles('admin', 'tesoreria')
   create(@Body() dto: CreatePagoProgramadoDto, @CurrentUser() user: any) {
-    return this.service.create(dto, user?.email);
+    return this.service.create(dto, { userId: user?.userId, email: user?.email });
   }
 
   @Get()
+  @Roles('admin', 'tesoreria', 'operador', 'consulta')
   findAll(
     @Query('estado') estado?: string,
     @Query('page') page?: number,
@@ -53,11 +54,13 @@ export class PagoProgramadoController {
   }
 
   @Get('proximos')
+  @Roles('admin', 'tesoreria', 'operador', 'consulta')
   getProximos(@Query('dias') dias?: number) {
     return this.service.getProximos(dias ? +dias : 7);
   }
 
   @Get('export')
+  @Roles('admin', 'tesoreria', 'operador', 'consulta')
   async export(
     @Query('estado') estado: string | undefined,
     @Query('formato') formato: string,
@@ -129,13 +132,14 @@ export class PagoProgramadoController {
   }
 
   @Get(':id')
+  @Roles('admin', 'tesoreria', 'operador', 'consulta')
   findOne(@Param('id') id: string) {
     return this.service.findOne(id);
   }
 
   @Patch(':id/cancelar')
   @Roles('admin', 'tesoreria', 'operador')
-  cancelar(@Param('id') id: string) {
-    return this.service.cancelar(id);
+  cancelar(@Param('id') id: string, @CurrentUser() user: any) {
+    return this.service.cancelar(id, { role: user?.role });
   }
 }

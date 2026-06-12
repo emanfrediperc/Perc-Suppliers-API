@@ -70,6 +70,14 @@ export class User {
   @Prop({ type: [String], default: [] })
   codigosRecuperacion: string[];
 
+  /**
+   * Último step TOTP (Math.floor(epoch/30s)) consumido con éxito por este usuario.
+   * Anti-replay: un código sólo se acepta si su step es estrictamente MAYOR al
+   * último consumido, evitando reusar el mismo OTP dentro de su ventana de validez.
+   */
+  @Prop({ type: Number, default: 0 })
+  ultimoTotpStep: number;
+
   /** Lockout de step-up por usuario (espeja failedLoginAttempts/lockUntil del login). */
   @Prop({ default: 0 })
   stepUpIntentosFallidos: number;

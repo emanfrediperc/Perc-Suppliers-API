@@ -1,5 +1,5 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { getModelToken } from '@nestjs/mongoose';
+import { getModelToken, getConnectionToken } from '@nestjs/mongoose';
 import { Types } from 'mongoose';
 import { ConfigService } from '@nestjs/config';
 import {
@@ -25,8 +25,14 @@ describe('SolicitudPagoService — state machine', () => {
   let service: SolicitudPagoService;
   let solicitudModel: any;
   let facturaModel: any;
+  let pagoModel: any;
+  let ordenModel: any;
+  let convenioModel: any;
+  let storageService: any;
+  let connection: any;
   const userId = '507f1f77bcf86cd799439011';
   const facturaId = '507f1f77bcf86cd799439020';
+  const ordenId = '507f1f77bcf86cd799439030';
 
   function makeFactura(over: any = {}) {
     return {
@@ -64,11 +70,32 @@ describe('SolicitudPagoService — state machine', () => {
       create: jest.fn(),
       findById: jest.fn(),
       findOneAndUpdate: jest.fn(),
+      updateOne: jest.fn().mockResolvedValue({ matchedCount: 1 }),
       find: jest.fn(),
     };
     facturaModel = {
       findById: jest.fn(),
     };
+    pagoModel = {
+      create: jest.fn().mockResolvedValue([{ _id: new Types.ObjectId() }]),
+      find: jest.fn().mockReturnValue({
+        session: () => ({ lean: () => Promise.resolve([]) }),
+        lean: () => Promise.resolve([]),
+      }),
+    };
+    ordenModel = { findById: jest.fn() };
+    convenioModel = {
+      findOne: jest.fn().mockReturnValue({
+        session: () => ({ lean: () => Promise.resolve(null) }),
+        lean: () => Promise.resolve(null),
+      }),
+    };
+    storageService = { upload: jest.fn(), getSignedDownloadUrl: jest.fn() };
+    const session = {
+      withTransaction: jest.fn(async (cb: any) => cb()),
+      endSession: jest.fn(),
+    };
+    connection = { startSession: jest.fn().mockResolvedValue(session) };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -78,27 +105,9 @@ describe('SolicitudPagoService — state machine', () => {
           useValue: solicitudModel,
         },
         { provide: getModelToken(Factura.name), useValue: facturaModel },
-        {
-          provide: getModelToken(Pago.name),
-          useValue: {
-            create: jest.fn(),
-            find: jest
-              .fn()
-              .mockReturnValue({ lean: () => Promise.resolve([]) }),
-          },
-        },
-        {
-          provide: getModelToken(OrdenPago.name),
-          useValue: { findById: jest.fn() },
-        },
-        {
-          provide: getModelToken(Convenio.name),
-          useValue: {
-            findOne: jest
-              .fn()
-              .mockReturnValue({ lean: () => Promise.resolve(null) }),
-          },
-        },
+        { provide: getModelToken(Pago.name), useValue: pagoModel },
+        { provide: getModelToken(OrdenPago.name), useValue: ordenModel },
+        { provide: getModelToken(Convenio.name), useValue: convenioModel },
         {
           provide: getModelToken(User.name),
           useValue: {
@@ -107,9 +116,10 @@ describe('SolicitudPagoService — state machine', () => {
             }),
           },
         },
+        { provide: getConnectionToken(), useValue: connection },
         {
           provide: StorageService,
-          useValue: { upload: jest.fn(), getSignedDownloadUrl: jest.fn() },
+          useValue: storageService,
         },
         {
           provide: PagoCalculatorService,
@@ -304,6 +314,52 @@ describe('SolicitudPagoService — state machine', () => {
         }),
       ).rejects.toThrow(ConflictException);
     });
+
+    // ── Segregación de funciones (cuatro ojos sobre el flujo de dinero) ──
+    // Regresión del hallazgo: el creador de la solicitud (incl. admin) NO debe
+    // poder aprobarla. Antes del fix, transicion() no comparaba createdBy.user
+    // contra user.userId y un admin podía crear+aprobar+ejecutar+procesar solo.
+    it('bloquea self-approval: el creador NO puede aprobar su propia solicitud', async () => {
+      const sol = makeSolicitud({
+        estado: 'pendiente',
+        createdBy: { user: new Types.ObjectId(userId) },
+      });
+      solicitudModel.findById.mockResolvedValue(sol);
+      solicitudModel.findOneAndUpdate.mockResolvedValue(sol);
+
+      await expect(
+        service.aprobar('507f1f77bcf86cd799439099', undefined, {
+          userId, // mismo actor que creó (createdBy.user)
+          email: '',
+          role: 'admin',
+        }),
+      ).rejects.toThrow(ForbiddenException);
+
+      // El ataque queda cerrado: nunca se transiciona el estado.
+      expect(solicitudModel.findOneAndUpdate).not.toHaveBeenCalled();
+    });
+
+    it('permite aprobar cuando el aprobador es un actor DISTINTO al creador', async () => {
+      const otroCreador = new Types.ObjectId().toString();
+      const sol = makeSolicitud({
+        estado: 'pendiente',
+        createdBy: { user: new Types.ObjectId(otroCreador) },
+      });
+      solicitudModel.findById.mockResolvedValue(sol);
+      solicitudModel.findOneAndUpdate.mockResolvedValue(sol);
+
+      await service.aprobar('507f1f77bcf86cd799439099', undefined, {
+        userId, // distinto de otroCreador
+        email: '',
+        role: 'contabilidad',
+      });
+
+      expect(solicitudModel.findOneAndUpdate).toHaveBeenCalledWith(
+        expect.objectContaining({ estado: 'pendiente' }),
+        expect.objectContaining({ $set: { estado: 'en_proceso' } }),
+        expect.anything(),
+      );
+    });
   });
 
   describe('cancelar / reagendar', () => {
@@ -364,6 +420,147 @@ describe('SolicitudPagoService — state machine', () => {
           { userId, email: '' },
         ),
       ).rejects.toThrow(/futura/);
+    });
+  });
+
+  // ─── procesar (#7: transacción atómica anti doble-pago) ──────────────
+  describe('procesar', () => {
+    const procId = '507f1f77bcf86cd799439099';
+    const files = {
+      perc: { originalname: 'perc.pdf' } as any,
+      retenciones: { originalname: 'ret.pdf' } as any,
+    };
+    const dto = {} as any;
+
+    function setupFacturaFlow(saldoTx: number, saldoPrelim = saldoTx) {
+      solicitudModel.findById.mockResolvedValue(
+        makeSolicitud({
+          estado: 'pago_en_proceso_perc',
+          factura: new Types.ObjectId(facturaId),
+          monto: 50000,
+        }),
+      );
+      const acquired = makeSolicitud({
+        estado: 'procesado',
+        factura: new Types.ObjectId(facturaId),
+        monto: 50000,
+      });
+      solicitudModel.findOneAndUpdate.mockResolvedValue(acquired);
+      const facturaDoc = makeFactura({
+        saldoPendiente: saldoTx,
+        montoTotal: 100000,
+        montoPagado: 0,
+        save: jest.fn().mockResolvedValue(undefined),
+      });
+      facturaModel.findById.mockReturnValue({
+        select: () => ({
+          lean: () => Promise.resolve({ saldoPendiente: saldoPrelim }),
+          session: () => Promise.resolve({ saldoPendiente: saldoTx }),
+        }),
+        session: () => Promise.resolve(facturaDoc),
+      });
+      storageService.upload.mockResolvedValue({ url: 'u', key: 'k' });
+      return { acquired };
+    }
+
+    it('crea el Pago DENTRO de la transacción y completa la solicitud (camino feliz)', async () => {
+      const { acquired } = setupFacturaFlow(100000); // saldo 100k ≥ monto 50k
+      const result = await service.procesar(procId, dto, files, {
+        userId,
+        email: '',
+      });
+      expect(connection.startSession).toHaveBeenCalled();
+      expect(pagoModel.create).toHaveBeenCalledWith(
+        [expect.objectContaining({ montoBase: 50000, estado: 'confirmado' })],
+        expect.objectContaining({ session: expect.anything() }),
+      );
+      expect(acquired.save).toHaveBeenCalled();
+      expect(result).toBe(acquired);
+    });
+
+    it('aborta con Conflict y revierte el estado si el saldo leído EN LA TRANSACCIÓN ya no cubre (doble-pago)', async () => {
+      // pre-check ve 100k (pasa), pero dentro de la tx el saldo es 10k (<50k)
+      setupFacturaFlow(10000, 100000);
+      await expect(
+        service.procesar(procId, dto, files, { userId, email: '' }),
+      ).rejects.toThrow(ConflictException);
+      expect(solicitudModel.updateOne).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({
+          $set: { estado: 'pago_en_proceso_perc' },
+        }),
+      );
+    });
+
+    it('rechaza en el pre-check sin subir comprobantes si el saldo ya no alcanza', async () => {
+      setupFacturaFlow(0, 10000); // pre-check ve 10k < monto 50k
+      await expect(
+        service.procesar(procId, dto, files, { userId, email: '' }),
+      ).rejects.toThrow(ConflictException);
+      expect(storageService.upload).not.toHaveBeenCalled();
+      expect(pagoModel.create).not.toHaveBeenCalled();
+    });
+
+    it('lanza Conflict si otro usuario ya adquirió el estado procesado', async () => {
+      solicitudModel.findById.mockResolvedValue(
+        makeSolicitud({
+          estado: 'pago_en_proceso_perc',
+          factura: new Types.ObjectId(facturaId),
+        }),
+      );
+      solicitudModel.findOneAndUpdate.mockResolvedValue(null);
+      await expect(
+        service.procesar(procId, dto, files, { userId, email: '' }),
+      ).rejects.toThrow(ConflictException);
+    });
+
+    it('exige ambos comprobantes (perc y retenciones)', async () => {
+      await expect(
+        service.procesar(procId, dto, { perc: files.perc } as any, {
+          userId,
+          email: '',
+        }),
+      ).rejects.toThrow(BadRequestException);
+    });
+
+    it('orden: aplica el pago a la orden dentro de la transacción', async () => {
+      solicitudModel.findById.mockResolvedValue(
+        makeSolicitud({
+          estado: 'pago_en_proceso_perc',
+          ordenPago: new Types.ObjectId(ordenId),
+          monto: 50000,
+        }),
+      );
+      const acquired = makeSolicitud({
+        estado: 'procesado',
+        ordenPago: new Types.ObjectId(ordenId),
+        monto: 50000,
+      });
+      solicitudModel.findOneAndUpdate.mockResolvedValue(acquired);
+      const ordenDoc = {
+        _id: new Types.ObjectId(ordenId),
+        montoTotal: 100000,
+        montoPagado: 0,
+        saldoPendiente: 100000,
+        facturas: [],
+        pagos: [],
+        estado: 'pendiente',
+        save: jest.fn().mockResolvedValue(undefined),
+      };
+      ordenModel.findById.mockReturnValue({
+        select: () => ({
+          lean: () => Promise.resolve({ saldoPendiente: 100000 }),
+          session: () => Promise.resolve({ saldoPendiente: 100000 }),
+        }),
+        populate: () => ({ session: () => Promise.resolve(ordenDoc) }),
+      });
+      storageService.upload.mockResolvedValue({ url: 'u', key: 'k' });
+
+      await service.procesar(procId, dto, files, { userId, email: '' });
+      expect(ordenDoc.save).toHaveBeenCalledWith(
+        expect.objectContaining({ session: expect.anything() }),
+      );
+      expect(ordenDoc.montoPagado).toBe(50000);
     });
   });
 });

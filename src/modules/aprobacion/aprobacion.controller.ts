@@ -17,12 +17,15 @@ import {
   ApiTags,
 } from '@nestjs/swagger';
 import * as express from 'express';
+import { ConfigService } from '@nestjs/config';
 import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../../auth/guards/roles.guard';
 import { Roles } from '../../auth/decorators/roles.decorator';
 import { CurrentUser } from '../../auth/decorators/current-user.decorator';
 import { AprobacionService } from './aprobacion.service';
 import { DecidirAprobacionDto } from './dto/decidir-aprobacion.dto';
+import { IniciarStepUpJwtDto } from './dto/iniciar-step-up-jwt.dto';
+import { VerificarStepUpJwtDto } from './dto/verificar-step-up-jwt.dto';
 import {
   ExportService,
   ExportColumn,
@@ -42,7 +45,13 @@ export class AprobacionController {
     private readonly service: AprobacionService,
     private readonly exportService: ExportService,
     private readonly geoService: GeoService,
+    private readonly configService: ConfigService,
   ) {}
+
+  /** Secreto compartido para confiar en headers CloudFront-Viewer-* (forense). */
+  private cloudfrontSecret(): string | undefined {
+    return this.configService.get<string>('forensics.cloudfrontSharedSecret');
+  }
 
   @Get('pendientes')
   @Roles('admin', 'aprobador')
@@ -215,10 +224,54 @@ export class AprobacionController {
       dto.decision,
       dto.comentario,
       {
-        ip: extraerIp(req),
+        ip: extraerIp(req, this.cloudfrontSecret()),
         userAgent: extraerUserAgent(req),
         geo: this.geoService.resolver(req),
       },
+      // El path JWT ahora también enforcea step-up: si la aprobación lo exige, el
+      // proof (desafioId + stepUpProof) es obligatorio acá, igual que en magic-link.
+      { desafioId: dto.desafioId, stepUpProof: dto.stepUpProof },
+    );
+  }
+
+  /**
+   * Inicia un desafío de step-up para el path JWT. El aprobador autenticado lo usa
+   * cuando la aprobación exige segundo factor antes de PATCH :id/decidir.
+   */
+  @Post(':id/step-up/iniciar')
+  @Roles('aprobador')
+  @ApiOperation({ summary: 'Iniciar step-up (segundo factor) por JWT' })
+  iniciarStepUp(
+    @Param('id') id: string,
+    @Body() _dto: IniciarStepUpJwtDto,
+    @CurrentUser() user: any,
+    @Req() req: express.Request,
+  ) {
+    return this.service.iniciarStepUpJwt(
+      id,
+      { userId: user.userId, email: user.email },
+      extraerIp(req, this.cloudfrontSecret()),
+      extraerUserAgent(req),
+    );
+  }
+
+  /** Verifica el segundo factor (path JWT) y devuelve el proof single-use. */
+  @Post(':id/step-up/verificar')
+  @Roles('aprobador')
+  @ApiOperation({ summary: 'Verificar step-up (segundo factor) por JWT' })
+  verificarStepUp(
+    @Param('id') id: string,
+    @Body() dto: VerificarStepUpJwtDto,
+    @CurrentUser() user: any,
+    @Req() req: express.Request,
+  ) {
+    return this.service.verificarStepUpJwt(
+      id,
+      { userId: user.userId },
+      dto.desafioId,
+      dto.secreto,
+      extraerIp(req, this.cloudfrontSecret()),
+      extraerUserAgent(req),
     );
   }
 

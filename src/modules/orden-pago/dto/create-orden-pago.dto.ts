@@ -8,6 +8,7 @@ export class CreateOrdenPagoDto {
   @ApiProperty() @IsMongoId() @IsNotEmpty() empresaProveedora: string;
   @ApiProperty({ example: 150000 }) @IsNumber() montoTotal: number;
   @ApiPropertyOptional({ example: 'ARS' }) @IsOptional() @IsString() moneda?: string;
-  @ApiPropertyOptional() @IsOptional() @IsString() estado?: string;
+  // `estado` removido a proposito: campo de servidor. Se fuerza 'esperando_aprobacion'
+  // al crear y solo se transiciona via aprobacion / metodos internos (no por API).
   @ApiPropertyOptional() @IsOptional() @IsArray() facturas?: string[];
 }

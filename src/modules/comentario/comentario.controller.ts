@@ -24,6 +24,7 @@ export class ComentarioController {
   constructor(private readonly service: ComentarioService) {}
 
   @Get()
+  @Roles('admin', 'tesoreria', 'operador', 'aprobador', 'consulta')
   findByEntidad(
     @Query('entidad') entidad: string,
     @Query('entidadId') entidadId: string,

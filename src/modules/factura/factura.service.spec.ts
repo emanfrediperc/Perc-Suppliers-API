@@ -40,7 +40,7 @@ describe('FacturaService', () => {
   let connection: any;
 
   beforeEach(async () => {
-    facturaModel = { create: jest.fn(), findById: jest.fn(), findOne: jest.fn() };
+    facturaModel = { create: jest.fn(), findById: jest.fn(), findOne: jest.fn(), findByIdAndUpdate: jest.fn() };
     empresaProvModel = { findById: jest.fn() };
     apocrifosService = { consultar: jest.fn() };
     afipService = { isConfigured: jest.fn().mockReturnValue(false), consultarCuit: jest.fn() };
@@ -134,6 +134,76 @@ describe('FacturaService', () => {
     it('lanza BadRequest si el monto excede el saldo', async () => {
       facturaModel.findById.mockReturnValue(query({ estado: 'pendiente', saldoPendiente: 1000, empresaProveedora: { _id: 'p1' } }));
       await expect(service.pagar('x', { montoBase: 5000, medioPago: 'transferencia' } as any)).rejects.toBeInstanceOf(BadRequestException);
+    });
+  });
+
+  describe('update() — mass-assignment guard', () => {
+    it('rechaza mutar montoTotal (no persiste, no descuadra saldo)', async () => {
+      await expect(service.update('f1', { montoTotal: 5000000 } as any)).rejects.toBeInstanceOf(
+        BadRequestException,
+      );
+      expect(facturaModel.findByIdAndUpdate).not.toHaveBeenCalled();
+    });
+
+    it('rechaza mutar montoNeto', async () => {
+      await expect(service.update('f1', { montoNeto: 5000000 } as any)).rejects.toBeInstanceOf(
+        BadRequestException,
+      );
+      expect(facturaModel.findByIdAndUpdate).not.toHaveBeenCalled();
+    });
+
+    it('rechaza reasignar el dueno (empresaProveedora)', async () => {
+      await expect(
+        service.update('f1', { empresaProveedora: '5f9d88b9c1e4a83b3c2e9999' } as any),
+      ).rejects.toBeInstanceOf(BadRequestException);
+      expect(facturaModel.findByIdAndUpdate).not.toHaveBeenCalled();
+    });
+
+    it('rechaza reasignar empresaCliente', async () => {
+      await expect(
+        service.update('f1', { empresaCliente: '5f9d88b9c1e4a83b3c2e9999' } as any),
+      ).rejects.toBeInstanceOf(BadRequestException);
+      expect(facturaModel.findByIdAndUpdate).not.toHaveBeenCalled();
+    });
+
+    it('rechaza cambiar el tipo (semantica nota de credito)', async () => {
+      await expect(service.update('f1', { tipo: 'NC-A' } as any)).rejects.toBeInstanceOf(
+        BadRequestException,
+      );
+      expect(facturaModel.findByIdAndUpdate).not.toHaveBeenCalled();
+    });
+
+    it('rechaza forzar estado/saldoPendiente/montoPagado directamente', async () => {
+      await expect(
+        service.update('f1', { estado: 'pagada', saldoPendiente: 0, montoPagado: 999 } as any),
+      ).rejects.toBeInstanceOf(BadRequestException);
+      expect(facturaModel.findByIdAndUpdate).not.toHaveBeenCalled();
+    });
+
+    it('rechaza reasignar ordenPago', async () => {
+      await expect(
+        service.update('f1', { ordenPago: '5f9d88b9c1e4a83b3c2e9999' } as any),
+      ).rejects.toBeInstanceOf(BadRequestException);
+      expect(facturaModel.findByIdAndUpdate).not.toHaveBeenCalled();
+    });
+
+    it('permite editar campos seguros (fechaVencimiento, archivo*)', async () => {
+      const updated = { _id: 'f1', fechaVencimiento: new Date('2026-12-31') };
+      facturaModel.findByIdAndUpdate.mockResolvedValue(updated);
+      const res = await service.update('f1', { fechaVencimiento: '2026-12-31' } as any);
+      expect(facturaModel.findByIdAndUpdate).toHaveBeenCalledWith(
+        'f1',
+        { fechaVencimiento: '2026-12-31' },
+        { new: true },
+      );
+      expect(res).toBe(updated);
+    });
+
+    it('lanza NotFound si la factura no existe', async () => {
+      facturaModel.findByIdAndUpdate.mockResolvedValue(null);
+      await expect(service.update('x', { finnegansId: 'FN-1' } as any)).rejects.toBeInstanceOf(
+        NotFoundException,
+      );
     });
   });
 

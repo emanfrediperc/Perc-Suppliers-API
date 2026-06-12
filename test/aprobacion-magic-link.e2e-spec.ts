@@ -39,7 +39,10 @@ function extractToken(spy: jest.Mock, callIndex = 0): string {
   if (!calls[callIndex]) throw new Error(`EmailService spy: no call at index ${callIndex}`);
   const [, data] = calls[callIndex];
   const url = new URL(data.magicLink);
-  const t = url.searchParams.get('t');
+  // El token viaja en el FRAGMENTO (#t=) por seguridad (no llega al server);
+  // fallback al query (?t=) por compatibilidad con enlaces legacy.
+  const hashParams = new URLSearchParams(url.hash.replace(/^#/, ''));
+  const t = hashParams.get('t') ?? url.searchParams.get('t');
   if (!t) throw new Error('Token no encontrado en magicLink: ' + data.magicLink);
   return t;
 }
@@ -55,6 +58,56 @@ async function login(
     .send({ email, password })
     .expect(201);
   return res.body.access_token;
+}
+
+const ADMIN_EMAIL = 'admin@perc.com';
+const ADMIN_SEED_PASS = 'admin123';
+// El seed marca al admin con mustChangePassword=true (hardening de seguridad):
+// su access token NO opera hasta rotar la credencial temporal. Rotamos UNA vez
+// por corrida a esta password; el estado del admin persiste en la DB entre
+// describe-blocks, asi que recordamos la password vigente en `adminPassActual`
+// para no generar logins fallidos (que dispararian el lockUntil del admin).
+const ADMIN_ROTATED_PASS = 'AdminRotada1234';
+let adminPassActual = ADMIN_SEED_PASS;
+
+/**
+ * Devuelve un adminToken OPERATIVO (mustChangePassword ya resuelto). Idempotente
+ * entre describe-blocks y robusto ante una DB ya rotada de una corrida previa.
+ */
+async function loginAdminOperativo(app: INestApplication): Promise<string> {
+  const server = app.getHttpServer();
+  let res = await request(server)
+    .post('/api/v1/auth/login')
+    .send({ email: ADMIN_EMAIL, password: adminPassActual });
+
+  // DB sucia de una corrida previa: la password ya no es la "actual" conocida.
+  if (res.status !== 201) {
+    const otra =
+      adminPassActual === ADMIN_SEED_PASS ? ADMIN_ROTATED_PASS : ADMIN_SEED_PASS;
+    res = await request(server)
+      .post('/api/v1/auth/login')
+      .send({ email: ADMIN_EMAIL, password: otra });
+    if (res.status === 201) adminPassActual = otra;
+  }
+  if (res.status !== 201) {
+    throw new Error(
+      `Login admin fallo (${res.status}): ${JSON.stringify(res.body)}`,
+    );
+  }
+
+  if (!res.body.user?.mustChangePassword) {
+    return res.body.access_token;
+  }
+
+  // Rotar la credencial temporal: el response del change-password ya trae un
+  // access token operativo (mustChangePassword=false, tokenVersion bumpeada).
+  const rotado = await request(server)
+    .post('/api/v1/auth/change-password')
+    .set('Authorization', `Bearer ${res.body.access_token}`)
+    .send({ oldPassword: adminPassActual, newPassword: ADMIN_ROTATED_PASS })
+    .expect(201);
+  adminPassActual = ADMIN_ROTATED_PASS;
+  return rotado.body.access_token;
 }
 
 /** Crea un usuario via admin endpoint y devuelve { id, token }. */
@@ -144,8 +197,9 @@ async function buildApp(magicLinkEnabled = true): Promise<{
 async function setupContext(prefix: string): Promise<AppContext> {
   const { app, emailSpy } = await buildApp(true);
 
-  // Login admin (usuario existente en DB de tests)
-  const adminToken = await login(app, 'admin@perc.com', 'admin123');
+  // Login admin (usuario existente en DB de tests) — rota la credencial temporal
+  // del seed (mustChangePassword) para obtener un token que pueda operar.
+  const adminToken = await loginAdminOperativo(app);
 
   const { token: tesoreriaToken } = await crearUsuario(app, adminToken, {
     email: `${prefix}-tesoreria@test.perc`,
@@ -396,7 +450,7 @@ describe('T025 — No aprobador activo → 400 al crear; flag off → 503', () =
 
   beforeAll(async () => {
     ({ app: appOn, emailSpy: emailSpyOn } = await buildApp(true));
-    adminToken = await login(appOn, 'admin@perc.com', 'admin123');
+    adminToken = await loginAdminOperativo(appOn);
 
     const { token } = await crearUsuario(appOn, adminToken, {
       email: 't025-tesoreria@test.perc',
@@ -564,7 +618,7 @@ describe('T027 — Rate limit: 11 requests/min al endpoint público → la 11ª 
 
 // ─── T044 — Contexto via token (Scenarios 3 & 17) ────────────────────────────
 
-describe('T044 — Contexto via token (GET contexto-token/:token)', () => {
+describe('T044 — Contexto via token (GET y POST contexto-token)', () => {
   let ctx: AppContext;
 
   beforeAll(async () => {
@@ -593,6 +647,55 @@ describe('T044 — Contexto via token (GET contexto-token/:token)', () => {
     });
     expect(res.body.expiraEn).toBeDefined();
     expect(res.body.fechaSolicitud).toBeDefined();
+  });
+
+  // POST contexto-token: mismo contrato que el GET, pero con el token en el BODY
+  // (no en el path) para no dejarlo en access logs / Referer.
+  it('POST contexto-token — devuelve 200 con el contexto para un token válido (token en body)', async () => {
+    const { rawToken } = await crearPrestamoConAprobacion(ctx);
+
+    const res = await request(ctx.app.getHttpServer())
+      .post('/api/v1/aprobaciones/contexto-token')
+      .send({ token: rawToken })
+      .expect(200);
+
+    expect(res.body).toMatchObject({
+      entidad: 'prestamos',
+      monto: expect.any(Number),
+      aprobadorEmail: expect.stringContaining('@'),
+    });
+  });
+
+  it('POST contexto-token — es idempotente: no consume el token (sigue usable para decidir)', async () => {
+    const { rawToken } = await crearPrestamoConAprobacion(ctx);
+
+    await request(ctx.app.getHttpServer())
+      .post('/api/v1/aprobaciones/contexto-token')
+      .send({ token: rawToken })
+      .expect(200);
+
+    const decisionRes = await request(ctx.app.getHttpServer())
+      .post('/api/v1/aprobaciones/decidir-via-token')
+      .send({ token: rawToken, decision: 'aprobar' })
+      .expect(200);
+
+    expect(decisionRes.body.estadoAprobacion).toBe('aprobada');
+  });
+
+  it('POST contexto-token — devuelve 401 genérico para un token basura', async () => {
+    const res = await request(ctx.app.getHttpServer())
+      .post('/api/v1/aprobaciones/contexto-token')
+      .send({ token: 'token-invalido-basura' })
+      .expect(401);
+
+    expect(res.body.message).toBe('Token inválido o expirado');
+  });
+
+  it('POST contexto-token — devuelve 400 si falta el token en el body', async () => {
+    await request(ctx.app.getHttpServer())
+      .post('/api/v1/aprobaciones/contexto-token')
+      .send({})
+      .expect(400);
   });
 
   // Scenario 3 (continuación): el token sigue siendo válido para decidir después del GET

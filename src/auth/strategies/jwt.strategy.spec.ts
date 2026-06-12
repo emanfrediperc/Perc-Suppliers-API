@@ -15,6 +15,7 @@ describe('JwtStrategy', () => {
     role: 'admin',
     activo: true,
     tokenVersion: 3,
+    mustChangePassword: false,
   };
 
   beforeEach(async () => {
@@ -55,7 +56,43 @@ describe('JwtStrategy', () => {
         userId: activeUser._id,
         email: activeUser.email,
         role: activeUser.role,
+        mustChangePassword: false,
       });
+    });
+
+    // ─── REGRESIÓN #1: el role sale de la DB, no se congela en el token ────────
+
+    it('SEGURIDAD: devuelve el role FRESCO de la DB, ignorando el role del token', async () => {
+      // El token viejo trae role:'admin' pero el admin ya degradó al usuario a 'consulta'
+      // en la DB. validate() debe devolver 'consulta', NO 'admin'.
+      userModel.findById.mockResolvedValue({ ...activeUser, role: 'consulta' });
+
+      const result = await strategy.validate({
+        sub: activeUser._id,
+        email: activeUser.email,
+        role: 'admin', // role obsoleto en el token
+        tokenVersion: 3,
+      });
+
+      expect((result as any).role).toBe('consulta');
+    });
+
+    // ─── REGRESIÓN #6: mustChangePassword viaja al guard server-side ───────────
+
+    it('SEGURIDAD: propaga mustChangePassword=true para que el guard lo enforce', async () => {
+      userModel.findById.mockResolvedValue({
+        ...activeUser,
+        mustChangePassword: true,
+      });
+
+      const result = await strategy.validate({
+        sub: activeUser._id,
+        email: activeUser.email,
+        role: activeUser.role,
+        tokenVersion: 3,
+      });
+
+      expect((result as any).mustChangePassword).toBe(true);
     });
 
     it('throws UnauthorizedException when user does not exist', async () => {

@@ -163,8 +163,8 @@ export class PrestamosController {
 
   @Patch(':id')
   @Roles('admin', 'tesoreria')
-  update(@Param('id') id: string, @Body() dto: UpdatePrestamoDto) {
-    return this.service.update(id, dto);
+  update(@Param('id') id: string, @Body() dto: UpdatePrestamoDto, @Req() req: any) {
+    return this.service.update(id, dto, { userId: req.user.userId, email: req.user.email });
   }
 
   @Post(':id/clear')
@@ -173,10 +173,14 @@ export class PrestamosController {
     return this.service.clear(id);
   }
 
+  // SEGURIDAD — renew() crea un préstamo NUEVO (crédito nuevo) que debe pasar por el
+  // gate de aprobación. Por eso se restringe a los roles que pueden CREAR préstamos
+  // (admin/tesoreria); 'operador' queda excluido porque "NO crea ni edita entidades"
+  // y antes podía fabricar un préstamo ACTIVE saltándose la aprobación.
   @Post(':id/renew')
-  @Roles('admin', 'tesoreria', 'operador')
-  renew(@Param('id') id: string, @Body() dto: RenewPrestamoDto) {
-    return this.service.renew(id, dto);
+  @Roles('admin', 'tesoreria')
+  renew(@Param('id') id: string, @Body() dto: RenewPrestamoDto, @Req() req: any) {
+    return this.service.renew(id, dto, { userId: req.user.userId, email: req.user.email });
   }
 
   @Delete(':id')

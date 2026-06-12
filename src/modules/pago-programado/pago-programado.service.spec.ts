@@ -1,13 +1,20 @@
 /**
- * Unit tests para PagoProgramadoService — guards de cancelar y el cron de ejecucion.
+ * Unit tests para PagoProgramadoService — gate de aprobacion en create(),
+ * guards de cancelar y el cron de ejecucion.
+ *
+ * Regresion de seguridad (cluster pagos-mass-assign):
+ *   - create() ya NO persiste un pago programado "listo para ejecutar": nace en
+ *     'esperando_aprobacion' y dispara el gate de aprobacion (createAprobacion).
+ *   - el cron solo ejecuta los que pasaron el gate (estado 'programado').
  */
 import { Test, TestingModule } from '@nestjs/testing';
-import { getModelToken } from '@nestjs/mongoose';
-import { NotFoundException } from '@nestjs/common';
+import { getModelToken, getConnectionToken } from '@nestjs/mongoose';
+import { BadRequestException, NotFoundException, ForbiddenException } from '@nestjs/common';
 
 import { PagoProgramadoService } from './pago-programado.service';
 import { PagoProgramado } from './schemas/pago-programado.schema';
 import { OrdenPagoService } from '../orden-pago/orden-pago.service';
+import { AprobacionService } from '../aprobacion/aprobacion.service';
 
 function query<T>(value: T) {
   const q: any = {};
@@ -19,19 +26,61 @@ function query<T>(value: T) {
 describe('PagoProgramadoService', () => {
   let service: PagoProgramadoService;
   let model: any;
+  let connection: any;
   let ordenPagoService: { pagar: jest.Mock };
+  let aprobacionService: { createAprobacion: jest.Mock };
 
   beforeEach(async () => {
     model = { create: jest.fn(), find: jest.fn(), findById: jest.fn(), countDocuments: jest.fn() };
+    connection = { startSession: jest.fn() };
     ordenPagoService = { pagar: jest.fn() };
+    aprobacionService = { createAprobacion: jest.fn() };
     const ref: TestingModule = await Test.createTestingModule({
       providers: [
         PagoProgramadoService,
         { provide: getModelToken(PagoProgramado.name), useValue: model },
+        { provide: getConnectionToken(), useValue: connection },
         { provide: OrdenPagoService, useValue: ordenPagoService },
+        { provide: AprobacionService, useValue: aprobacionService },
       ],
     }).compile();
     service = ref.get(PagoProgramadoService);
+  });
+
+  describe('create() — gate de aprobacion (regresion seguridad)', () => {
+    const user = { userId: 'u1', email: 'tesoreria@perc.com' };
+    const dto: any = { ordenPago: 'o1', montoBase: 500000, medioPago: 'transferencia', fechaProgramada: '2026-06-01' };
+
+    beforeEach(() => {
+      const session = { withTransaction: jest.fn(async (cb: any) => cb()), endSession: jest.fn() };
+      connection.startSession.mockResolvedValue(session);
+      model.create.mockResolvedValue([{ _id: { toString: () => 'pp1' } }]);
+    });
+
+    it('persiste el pago programado en estado esperando_aprobacion (NO programado)', async () => {
+      aprobacionService.createAprobacion.mockResolvedValue({});
+      await service.create(dto, user);
+      expect(model.create).toHaveBeenCalledWith(
+        [expect.objectContaining({ ordenPago: 'o1', estado: 'esperando_aprobacion' })],
+        expect.objectContaining({ session: expect.anything() }),
+      );
+      // El estado NUNCA debe nacer como 'programado' (ejecutable por el cron sin aprobar)
+      const persisted = model.create.mock.calls[0][0][0];
+      expect(persisted.estado).not.toBe('programado');
+    });
+
+    it('dispara el gate de aprobacion con entidad/monto correctos', async () => {
+      aprobacionService.createAprobacion.mockResolvedValue({});
+      await service.create(dto, user);
+      expect(aprobacionService.createAprobacion).toHaveBeenCalledWith(
+        expect.objectContaining({ entidad: 'pagos-programados', entidadId: 'pp1', monto: 500000, createdBy: 'u1' }),
+      );
+    });
+
+    it('aborta si no hay aprobadores (createAprobacion lanza)', async () => {
+      aprobacionService.createAprobacion.mockRejectedValue(new BadRequestException('Sin aprobadores'));
+      await expect(service.create(dto, user)).rejects.toBeInstanceOf(BadRequestException);
+    });
   });
 
   describe('findOne()', () => {
@@ -46,16 +95,44 @@ describe('PagoProgramadoService', () => {
       model.findById.mockResolvedValue(null);
       await expect(service.cancelar('x')).rejects.toBeInstanceOf(NotFoundException);
     });
-    it('rechaza cancelar si no esta en estado programado', async () => {
+    it('rechaza cancelar (BadRequest) si ya esta ejecutado', async () => {
       model.findById.mockResolvedValue({ estado: 'ejecutado' });
-      await expect(service.cancelar('x')).rejects.toBeInstanceOf(NotFoundException);
+      await expect(service.cancelar('x')).rejects.toBeInstanceOf(BadRequestException);
     });
-    it('cancela un pago programado', async () => {
+    it('cancela un pago programado en estado programado', async () => {
       const pp: any = { estado: 'programado', save: jest.fn().mockResolvedValue(undefined) };
       model.findById.mockResolvedValue(pp);
       await service.cancelar('x');
       expect(pp.estado).toBe('cancelado');
       expect(pp.save).toHaveBeenCalled();
+    });
+    it('permite cancelar uno en esperando_aprobacion (el creador retira la solicitud)', async () => {
+      const pp: any = { estado: 'esperando_aprobacion', save: jest.fn().mockResolvedValue(undefined) };
+      model.findById.mockResolvedValue(pp);
+      await service.cancelar('x');
+      expect(pp.estado).toBe('cancelado');
+    });
+
+    // Least-privilege (N3): 'cancelar' es cambio de estado -> operador/admin.
+    // tesoreria solo retira su propia solicitud mientras sigue sin aprobar.
+    it('PROHIBE a tesoreria cancelar uno ya aprobado (programado) — Forbidden', async () => {
+      const pp: any = { estado: 'programado', save: jest.fn() };
+      model.findById.mockResolvedValue(pp);
+      await expect(service.cancelar('x', { role: 'tesoreria' })).rejects.toBeInstanceOf(ForbiddenException);
+      expect(pp.estado).toBe('programado'); // no se tocó
+      expect(pp.save).not.toHaveBeenCalled();
+    });
+    it('PERMITE a tesoreria retirar su solicitud en esperando_aprobacion', async () => {
+      const pp: any = { estado: 'esperando_aprobacion', save: jest.fn().mockResolvedValue(undefined) };
+      model.findById.mockResolvedValue(pp);
+      await service.cancelar('x', { role: 'tesoreria' });
+      expect(pp.estado).toBe('cancelado');
+    });
+    it('PERMITE a operador cancelar uno ya aprobado (programado)', async () => {
+      const pp: any = { estado: 'programado', save: jest.fn().mockResolvedValue(undefined) };
+      model.findById.mockResolvedValue(pp);
+      await service.cancelar('x', { role: 'operador' });
+      expect(pp.estado).toBe('cancelado');
     });
   });
 
@@ -64,6 +141,17 @@ describe('PagoProgramadoService', () => {
       _id: 'pp1', ordenPago: { toString: () => 'o1' }, montoBase: 1000, medioPago: 'transferencia',
       fechaProgramada: new Date('2026-06-01'), estado: 'programado',
       save: jest.fn().mockResolvedValue(undefined),
+    });
+
+    it('solo consulta los pagos programados ya APROBADOS (estado programado)', async () => {
+      model.find.mockResolvedValue([]);
+      await service.ejecutarPagosProgramados();
+      expect(model.find).toHaveBeenCalledWith(
+        expect.objectContaining({ estado: 'programado' }),
+      );
+      // Nunca debe ejecutar items en espera de aprobacion
+      const filtro = model.find.mock.calls[0][0];
+      expect(filtro.estado).not.toBe('esperando_aprobacion');
     });
 
     it('marca ejecutado y guarda pagoGenerado en exito', async () => {
