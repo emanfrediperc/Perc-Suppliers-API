@@ -60,6 +60,56 @@ async function login(
   return res.body.access_token;
 }
 
+const ADMIN_EMAIL = 'admin@perc.com';
+const ADMIN_SEED_PASS = 'admin123';
+// El seed marca al admin con mustChangePassword=true (hardening de seguridad):
+// su access token NO opera hasta rotar la credencial temporal. Rotamos UNA vez
+// por corrida a esta password; el estado del admin persiste en la DB entre
+// describe-blocks, asi que recordamos la password vigente en `adminPassActual`
+// para no generar logins fallidos (que dispararian el lockUntil del admin).
+const ADMIN_ROTATED_PASS = 'AdminRotada1234';
+let adminPassActual = ADMIN_SEED_PASS;
+
+/**
+ * Devuelve un adminToken OPERATIVO (mustChangePassword ya resuelto). Idempotente
+ * entre describe-blocks y robusto ante una DB ya rotada de una corrida previa.
+ */
+async function loginAdminOperativo(app: INestApplication): Promise<string> {
+  const server = app.getHttpServer();
+  let res = await request(server)
+    .post('/api/v1/auth/login')
+    .send({ email: ADMIN_EMAIL, password: adminPassActual });
+
+  // DB sucia de una corrida previa: la password ya no es la "actual" conocida.
+  if (res.status !== 201) {
+    const otra =
+      adminPassActual === ADMIN_SEED_PASS ? ADMIN_ROTATED_PASS : ADMIN_SEED_PASS;
+    res = await request(server)
+      .post('/api/v1/auth/login')
+      .send({ email: ADMIN_EMAIL, password: otra });
+    if (res.status === 201) adminPassActual = otra;
+  }
+  if (res.status !== 201) {
+    throw new Error(
+      `Login admin fallo (${res.status}): ${JSON.stringify(res.body)}`,
+    );
+  }
+
+  if (!res.body.user?.mustChangePassword) {
+    return res.body.access_token;
+  }
+
+  // Rotar la credencial temporal: el response del change-password ya trae un
+  // access token operativo (mustChangePassword=false, tokenVersion bumpeada).
+  const rotado = await request(server)
+    .post('/api/v1/auth/change-password')
+    .set('Authorization', `Bearer ${res.body.access_token}`)
+    .send({ oldPassword: adminPassActual, newPassword: ADMIN_ROTATED_PASS })
+    .expect(201);
+  adminPassActual = ADMIN_ROTATED_PASS;
+  return rotado.body.access_token;
+}
+
 /** Crea un usuario via admin endpoint y devuelve { id, token }. */
 async function crearUsuario(
   app: INestApplication,
@@ -147,8 +197,9 @@ async function buildApp(magicLinkEnabled = true): Promise<{
 async function setupContext(prefix: string): Promise<AppContext> {
   const { app, emailSpy } = await buildApp(true);
 
-  // Login admin (usuario existente en DB de tests)
-  const adminToken = await login(app, 'admin@perc.com', 'admin123');
+  // Login admin (usuario existente en DB de tests) — rota la credencial temporal
+  // del seed (mustChangePassword) para obtener un token que pueda operar.
+  const adminToken = await loginAdminOperativo(app);
 
   const { token: tesoreriaToken } = await crearUsuario(app, adminToken, {
     email: `${prefix}-tesoreria@test.perc`,
@@ -399,7 +450,7 @@ describe('T025 — No aprobador activo → 400 al crear; flag off → 503', () =
 
   beforeAll(async () => {
     ({ app: appOn, emailSpy: emailSpyOn } = await buildApp(true));
-    adminToken = await login(appOn, 'admin@perc.com', 'admin123');
+    adminToken = await loginAdminOperativo(appOn);
 
     const { token } = await crearUsuario(appOn, adminToken, {
       email: 't025-tesoreria@test.perc',
