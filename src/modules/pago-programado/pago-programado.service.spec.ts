@@ -9,7 +9,7 @@
  */
 import { Test, TestingModule } from '@nestjs/testing';
 import { getModelToken, getConnectionToken } from '@nestjs/mongoose';
-import { BadRequestException, NotFoundException } from '@nestjs/common';
+import { BadRequestException, NotFoundException, ForbiddenException } from '@nestjs/common';
 
 import { PagoProgramadoService } from './pago-programado.service';
 import { PagoProgramado } from './schemas/pago-programado.schema';
@@ -110,6 +110,28 @@ describe('PagoProgramadoService', () => {
       const pp: any = { estado: 'esperando_aprobacion', save: jest.fn().mockResolvedValue(undefined) };
       model.findById.mockResolvedValue(pp);
       await service.cancelar('x');
+      expect(pp.estado).toBe('cancelado');
+    });
+
+    // Least-privilege (N3): 'cancelar' es cambio de estado -> operador/admin.
+    // tesoreria solo retira su propia solicitud mientras sigue sin aprobar.
+    it('PROHIBE a tesoreria cancelar uno ya aprobado (programado) — Forbidden', async () => {
+      const pp: any = { estado: 'programado', save: jest.fn() };
+      model.findById.mockResolvedValue(pp);
+      await expect(service.cancelar('x', { role: 'tesoreria' })).rejects.toBeInstanceOf(ForbiddenException);
+      expect(pp.estado).toBe('programado'); // no se tocó
+      expect(pp.save).not.toHaveBeenCalled();
+    });
+    it('PERMITE a tesoreria retirar su solicitud en esperando_aprobacion', async () => {
+      const pp: any = { estado: 'esperando_aprobacion', save: jest.fn().mockResolvedValue(undefined) };
+      model.findById.mockResolvedValue(pp);
+      await service.cancelar('x', { role: 'tesoreria' });
+      expect(pp.estado).toBe('cancelado');
+    });
+    it('PERMITE a operador cancelar uno ya aprobado (programado)', async () => {
+      const pp: any = { estado: 'programado', save: jest.fn().mockResolvedValue(undefined) };
+      model.findById.mockResolvedValue(pp);
+      await service.cancelar('x', { role: 'operador' });
       expect(pp.estado).toBe('cancelado');
     });
   });

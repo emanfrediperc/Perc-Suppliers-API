@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException, BadRequestException, Logger } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException, ForbiddenException, Logger } from '@nestjs/common';
 import { InjectModel, InjectConnection } from '@nestjs/mongoose';
 import { Model, Connection } from 'mongoose';
 import { Cron, CronExpression } from '@nestjs/schedule';
@@ -82,9 +82,17 @@ export class PagoProgramadoService {
     return pp;
   }
 
-  async cancelar(id: string) {
+  async cancelar(id: string, user?: { role?: string }) {
     const pp = await this.model.findById(id);
     if (!pp) throw new NotFoundException('Pago programado no encontrado');
+    // Least-privilege (N3): 'cancelar' es un cambio de estado, competencia de
+    // operador/admin. tesoreria NO cambia estados de operaciones ya aprobadas;
+    // solo puede RETIRAR su propia solicitud mientras sigue 'esperando_aprobacion'.
+    if (user?.role === 'tesoreria' && pp.estado !== 'esperando_aprobacion') {
+      throw new ForbiddenException(
+        'tesoreria solo puede cancelar pagos programados en espera de aprobacion (retirar la solicitud); cancelar uno ya aprobado es competencia de operador',
+      );
+    }
     // Cancelable mientras no se haya desembolsado: tanto 'programado' (aprobado y
     // pendiente de ejecucion) como 'esperando_aprobacion' (el creador retira la solicitud).
     const CANCELABLES = ['programado', 'esperando_aprobacion'];

@@ -139,7 +139,7 @@ export class PagoProgramadoController {
 
   @Patch(':id/cancelar')
   @Roles('admin', 'tesoreria', 'operador')
-  cancelar(@Param('id') id: string) {
-    return this.service.cancelar(id);
+  cancelar(@Param('id') id: string, @CurrentUser() user: any) {
+    return this.service.cancelar(id, { role: user?.role });
   }
 }
