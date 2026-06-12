@@ -1,5 +1,8 @@
 import type { Request } from 'express';
 
+/** Header (custom) que CloudFront inyecta con un secreto compartido para probar el origen. */
+export const CLOUDFRONT_SECRET_HEADER = 'x-cloudfront-shared-secret';
+
 /**
  * Quita el puerto de una dirección "ip:puerto" (formato de CloudFront-Viewer-Address).
  * Soporta IPv4 (`1.2.3.4:5678`) e IPv6 con corchetes (`[::1]:5678`).
@@ -15,14 +18,45 @@ function stripPort(addr: string): string {
 }
 
 /**
- * IP real del cliente con precedencia: CloudFront-Viewer-Address (sin puerto) > req.ip > 'unknown'.
- * `req.ip` es confiable sólo si `trust proxy` está configurado (ver main.ts); detrás de
- * CloudFront el header Viewer-Address es la fuente de mayor fidelidad.
+ * Comparación en tiempo constante de strings cortos (evita timing-oracle sobre el secreto).
  */
-export function extraerIp(req: Request): string {
-  const cf = req.headers['cloudfront-viewer-address'];
-  if (typeof cf === 'string' && cf.length > 0) {
-    return stripPort(cf);
+function secretosIguales(a: string, b: string): boolean {
+  if (a.length !== b.length) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  return diff === 0;
+}
+
+/**
+ * ¿El request entró realmente por CloudFront confiable? Sólo si trae el header de
+ * secreto compartido con el valor esperado. Sin secreto configurado → NO confiable
+ * (no se puede probar el origen, así que no confiamos en los headers Viewer-*).
+ *
+ * SEGURIDAD: el endpoint público de magic-link permite a cualquier cliente inyectar
+ * `CloudFront-Viewer-Address`/`-Country`. Si confiáramos en ellos sin verificar el
+ * origen, el atacante podría envenenar la IP/geo del rastro forense de no-repudio.
+ */
+export function vieneDeCloudFrontConfiable(
+  req: Request,
+  sharedSecret?: string,
+): boolean {
+  if (!sharedSecret) return false;
+  const recibido = req.headers[CLOUDFRONT_SECRET_HEADER];
+  return typeof recibido === 'string' && secretosIguales(recibido, sharedSecret);
+}
+
+/**
+ * IP real del cliente. Confía en `CloudFront-Viewer-Address` (sin puerto) SÓLO si el
+ * request probó venir de CloudFront (header de secreto compartido). En cualquier otro
+ * caso usa `req.ip`, que Express resuelve con `trust proxy` (N hops acotados, ver main.ts)
+ * y NO es spoofeable vía headers arbitrarios del cliente.
+ */
+export function extraerIp(req: Request, sharedSecret?: string): string {
+  if (vieneDeCloudFrontConfiable(req, sharedSecret)) {
+    const cf = req.headers['cloudfront-viewer-address'];
+    if (typeof cf === 'string' && cf.length > 0) {
+      return stripPort(cf);
+    }
   }
   return req.ip ?? 'unknown';
 }

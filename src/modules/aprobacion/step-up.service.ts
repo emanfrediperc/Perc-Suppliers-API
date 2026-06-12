@@ -81,8 +81,61 @@ export class StepUpService {
     expiraEn: Date;
     intentosRestantes: number;
   }> {
+    // Identidad DERIVADA del magic-link token (nunca del request).
     const tokenDoc = await this.tokenService.verify(rawToken);
-    const user = await this.userModel.findById(tokenDoc.userId);
+    return this.iniciarDesafioCore(
+      tokenDoc.aprobacionId.toString(),
+      tokenDoc.userId,
+      tokenDoc.userEmail,
+      factorConfig,
+      ip,
+      userAgent,
+    );
+  }
+
+  /**
+   * Variante para el path JWT (PATCH /aprobaciones/:id/decidir): la identidad
+   * viene del JWT del aprobador, no de un magic-link token. Mismo enforcement de
+   * segundo factor que el magic-link — no dejamos dos canales con políticas
+   * de auth distintas para la misma decisión.
+   */
+  async iniciarDesafioJwt(
+    aprobacionId: string,
+    userId: string,
+    userEmail: string,
+    factorConfig: Factor,
+    ip: string,
+    userAgent: string,
+  ): Promise<{
+    desafioId: string;
+    factorRequerido: Factor;
+    expiraEn: Date;
+    intentosRestantes: number;
+  }> {
+    return this.iniciarDesafioCore(
+      aprobacionId,
+      userId,
+      userEmail,
+      factorConfig,
+      ip,
+      userAgent,
+    );
+  }
+
+  private async iniciarDesafioCore(
+    aprobacionId: string,
+    userId: string,
+    userEmail: string,
+    factorConfig: Factor,
+    ip: string,
+    userAgent: string,
+  ): Promise<{
+    desafioId: string;
+    factorRequerido: Factor;
+    expiraEn: Date;
+    intentosRestantes: number;
+  }> {
+    const user = await this.userModel.findById(userId);
     if (!user) throw new UnauthorizedException('Token inválido o expirado');
 
     // Lockout por usuario: no permitir crear nuevos desafíos si está bloqueado
@@ -97,9 +150,9 @@ export class StepUpService {
     const expiresAt = new Date(Date.now() + DESAFIO_TTL_MIN * 60_000);
 
     const desafio = await this.desafioModel.create({
-      aprobacionId: tokenDoc.aprobacionId,
-      userId: tokenDoc.userId,
-      userEmail: tokenDoc.userEmail,
+      aprobacionId,
+      userId,
+      userEmail,
       factorRequerido: factor,
       expiresAt,
       ip,
@@ -107,10 +160,10 @@ export class StepUpService {
     });
 
     this.audit(
-      tokenDoc.userId,
+      userId,
       user.email,
       'step-up-iniciado',
-      tokenDoc.aprobacionId.toString(),
+      aprobacionId,
       { factor },
       ip,
       userAgent,
@@ -136,7 +189,45 @@ export class StepUpService {
     userAgent: string,
   ): Promise<{ stepUpProof: string }> {
     const tokenDoc = await this.tokenService.verify(rawToken);
-    const desafio = await this.cargarDesafioScoped(desafioId, tokenDoc);
+    return this.verificarDesafioCore(
+      { aprobacionId: tokenDoc.aprobacionId, userId: tokenDoc.userId },
+      desafioId,
+      secreto,
+      ip,
+      userAgent,
+    );
+  }
+
+  /**
+   * Variante JWT: la identidad viene del JWT del aprobador. Mismo flujo de
+   * verificación/lockout/proof single-use que el magic-link.
+   */
+  async verificarDesafioJwt(
+    aprobacionId: string,
+    userId: string,
+    desafioId: string,
+    secreto: string,
+    ip: string,
+    userAgent: string,
+  ): Promise<{ stepUpProof: string }> {
+    return this.verificarDesafioCore(
+      { aprobacionId, userId },
+      desafioId,
+      secreto,
+      ip,
+      userAgent,
+    );
+  }
+
+  private async verificarDesafioCore(
+    scope: { aprobacionId: any; userId: string },
+    desafioId: string,
+    secreto: string,
+    ip: string,
+    userAgent: string,
+  ): Promise<{ stepUpProof: string }> {
+    const desafio = await this.cargarDesafioScoped(desafioId, scope);
+    const aprobacionIdStr = scope.aprobacionId.toString();
 
     const ahora = new Date();
     if (desafio.bloqueadoHasta && desafio.bloqueadoHasta > ahora) {
@@ -148,7 +239,7 @@ export class StepUpService {
       throw new BadRequestException('El desafío ya fue satisfecho');
     }
 
-    const user = await this.userModel.findById(tokenDoc.userId);
+    const user = await this.userModel.findById(scope.userId);
     if (!user) throw new UnauthorizedException('Token inválido o expirado');
 
     // Lockout por usuario (no se evade recreando desafíos): gate antes de validar.
@@ -183,10 +274,10 @@ export class StepUpService {
       await user.save();
       const bloqueado = !!desafio.bloqueadoHasta;
       this.audit(
-        tokenDoc.userId,
+        scope.userId,
         user.email,
         bloqueado ? 'step-up-bloqueado' : 'step-up-fallido',
-        tokenDoc.aprobacionId.toString(),
+        aprobacionIdStr,
         {
           intentosFallidos: desafio.intentosFallidos,
           factor: desafio.factorRequerido,
@@ -213,10 +304,10 @@ export class StepUpService {
     }
 
     this.audit(
-      tokenDoc.userId,
+      scope.userId,
       user.email,
       'step-up-satisfecho',
-      tokenDoc.aprobacionId.toString(),
+      aprobacionIdStr,
       { factorUsado: desafio.factorUsado, desafioId },
       ip,
       userAgent,
@@ -285,11 +376,50 @@ export class StepUpService {
     const encKey = this.config.get<string>('totp.encKey') || '';
     try {
       const secret = descifrar(user.totpSecretCifrado, encKey);
-      return authenticator.verify({ token: secreto, secret });
+      // Single-use: rechaza el replay de un código TOTP ya usado (mismo principio
+      // que el login). Sin esto, un código capturado se reusa dentro de su ventana
+      // de 30s para satisfacer step-up en otra acción.
+      return await this.verificarTotpSingleUse(user, secreto, secret);
     } catch (e: any) {
       this.logger.warn(`TOTP verify falló: ${e?.message ?? e}`);
       return false;
     }
+  }
+
+  /**
+   * Verifica un TOTP y marca su step como consumido (anti-replay), igual que en
+   * AuthService.verificarTotpSingleUse. Acota la tolerancia a window:1 y persiste
+   * atómicamente el step para que un código no pueda reutilizarse.
+   */
+  private async verificarTotpSingleUse(
+    user: UserDocument,
+    codigo: string,
+    secret: string,
+  ): Promise<boolean> {
+    authenticator.options = { window: 1 };
+    const delta = authenticator.checkDelta(codigo, secret);
+    if (delta === null || delta === undefined) return false;
+
+    const opciones = authenticator.allOptions();
+    const stepSegundos = opciones.step ?? 30;
+    const stepActual = Math.floor(Date.now() / 1000 / stepSegundos);
+    const stepConsumido = stepActual + delta;
+
+    if (stepConsumido <= (user.ultimoTotpStep ?? 0)) return false;
+
+    const res = await this.userModel.updateOne(
+      {
+        _id: user._id,
+        $or: [
+          { ultimoTotpStep: { $lt: stepConsumido } },
+          { ultimoTotpStep: { $exists: false } },
+        ],
+      },
+      { $set: { ultimoTotpStep: stepConsumido } },
+    );
+    if (res.modifiedCount !== 1) return false;
+    user.ultimoTotpStep = stepConsumido;
+    return true;
   }
 
   private hash(raw: string): string {

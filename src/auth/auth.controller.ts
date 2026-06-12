@@ -17,6 +17,7 @@ import { UpdateUserDto } from './dto/update-user.dto';
 import { ChangePasswordDto } from './dto/change-password.dto';
 import { ConfirmarTotpDto } from './dto/confirmar-totp.dto';
 import { LoginTotpDto } from './dto/login-totp.dto';
+import { RevocarTotpDto } from './dto/revocar-totp.dto';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
 import { RolesGuard } from './guards/roles.guard';
 import { CurrentUser } from './decorators/current-user.decorator';
@@ -117,8 +118,14 @@ export class AuthController {
   @Delete('totp')
   @UseGuards(JwtAuthGuard)
   @ApiBearerAuth()
-  revocarTotp(@CurrentUser() user: any) {
-    return this.authService.revocarTotp(user.userId);
+  revocarTotp(@CurrentUser() user: any, @Body() dto: RevocarTotpDto) {
+    // Self-service: exige re-auth (password + código si hay 2FA activo) para que
+    // un access token robado no pueda apagar el segundo factor de la víctima.
+    return this.authService.revocarTotpPropio(
+      user.userId,
+      dto.password,
+      dto.codigo,
+    );
   }
 
   /** Revocación administrativa (ej. el aprobador perdió el dispositivo). */

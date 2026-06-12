@@ -156,7 +156,8 @@ export class AuthService {
 
     const encKey = this.config.get<string>('totp.encKey') || '';
     const secret = descifrar(user.totpSecretCifrado, encKey);
-    const okTotp = authenticator.verify({ token: codigo, secret });
+    // Single-use: rechaza el replay de un mismo código dentro de su ventana.
+    const okTotp = await this.verificarTotpSingleUse(user, codigo, secret);
     if (!okTotp) {
       const okRecovery = await this.consumirCodigoRecuperacion(user, codigo);
       if (!okRecovery) {
@@ -253,6 +254,49 @@ export class AuthService {
     }
   }
 
+  /**
+   * Verifica un código TOTP y lo marca como CONSUMIDO (single-use real).
+   * otplib por defecto acepta el mismo código tantas veces como se envíe dentro
+   * de su ventana de 30s. Para cerrar el replay (login y step-up):
+   *  - acotamos la tolerancia a window:1 (step actual + el anterior),
+   *  - calculamos el step que matcheó (epoch/30s + delta),
+   *  - lo aceptamos sólo si es > ultimoTotpStep,
+   *  - persistimos atómicamente el nuevo step condicionado a que siga siendo el
+   *    mayor (gana un solo request bajo concurrencia → single-use real).
+   */
+  async verificarTotpSingleUse(
+    user: UserDocument,
+    codigo: string,
+    secret: string,
+  ): Promise<boolean> {
+    authenticator.options = { window: 1 };
+    const delta = authenticator.checkDelta(codigo, secret);
+    if (delta === null || delta === undefined) return false;
+
+    const opciones = authenticator.allOptions();
+    const stepSegundos = opciones.step ?? 30;
+    const stepActual = Math.floor(Date.now() / 1000 / stepSegundos);
+    const stepConsumido = stepActual + delta;
+
+    // Replay: el código ya fue (o un código de un step posterior ya fue) usado.
+    if (stepConsumido <= (user.ultimoTotpStep ?? 0)) return false;
+
+    // Consumo atómico: sólo avanza si nadie consumió un step >= en paralelo.
+    const res = await this.userModel.updateOne(
+      {
+        _id: user._id,
+        $or: [
+          { ultimoTotpStep: { $lt: stepConsumido } },
+          { ultimoTotpStep: { $exists: false } },
+        ],
+      },
+      { $set: { ultimoTotpStep: stepConsumido } },
+    );
+    if (res.modifiedCount !== 1) return false;
+    user.ultimoTotpStep = stepConsumido;
+    return true;
+  }
+
   /** Consume un código de recuperación (bcrypt, single-use). true si era válido. */
   private async consumirCodigoRecuperacion(
     user: UserDocument,
@@ -286,11 +330,29 @@ export class AuthService {
   }
 
   async updateUser(userId: string, dto: UpdateUserDto) {
-    const user = await this.userModel
-      .findByIdAndUpdate(userId, dto, { new: true })
-      .select('-password');
+    const user = await this.userModel.findById(userId);
     if (!user) throw new NotFoundException('Usuario no encontrado');
-    return user;
+
+    // SEGURIDAD: cambiar role o activo afecta la autorización. Si no rotamos
+    // tokenVersion, los access tokens ya emitidos siguen cargando el role viejo
+    // y el RolesGuard los acepta hasta que expiren (JWT_EXPIRES_IN, default 24h).
+    // Degradar/revocar privilegios via UI no tendría efecto inmediato.
+    const cambiaRole = dto.role !== undefined && dto.role !== user.role;
+    const cambiaActivo = dto.activo !== undefined && dto.activo !== user.activo;
+
+    if (dto.nombre !== undefined) user.nombre = dto.nombre;
+    if (dto.apellido !== undefined) user.apellido = dto.apellido;
+    if (dto.role !== undefined) user.role = dto.role;
+    if (dto.activo !== undefined) user.activo = dto.activo;
+
+    if (cambiaRole || cambiaActivo) {
+      user.tokenVersion = (user.tokenVersion || 0) + 1;
+    }
+
+    await user.save();
+    const obj = user.toObject();
+    delete (obj as any).password;
+    return obj;
   }
 
   async resetPassword(userId: string): Promise<{ temporaryPassword: string }> {
@@ -401,7 +463,12 @@ export class AuthService {
     return { habilitado: true, codigosRecuperacion: plano };
   }
 
-  /** Revoca el TOTP del usuario (admin tras pérdida de dispositivo, o el propio usuario). */
+  /**
+   * Revoca el TOTP del usuario (USO ADMINISTRATIVO: admin tras pérdida de
+   * dispositivo). El path self-service va por revocarTotpPropio(), que exige
+   * re-auth antes de delegar acá. NO exponer este método sin re-auth a un JWT
+   * del propio usuario: apagar el 2FA es un downgrade de seguridad.
+   */
   async revocarTotp(userId: string): Promise<{ revocado: boolean }> {
     const user = await this.userModel.findById(userId);
     if (!user) throw new NotFoundException('Usuario no encontrado');
@@ -409,6 +476,59 @@ export class AuthService {
     user.totpHabilitado = false;
     user.totpActivadoEn = null;
     user.codigosRecuperacion = [];
+    await user.save();
+    return { revocado: true };
+  }
+
+  /**
+   * Revocación self-service del 2FA propio, CON re-autenticación obligatoria.
+   * Un access token robado no debe alcanzar para apagar el segundo factor de la
+   * víctima: exigimos la contraseña actual y, si el usuario tiene TOTP activo, un
+   * código TOTP (o de recuperación) válido. Al revocar se bumpea tokenVersion para
+   * forzar re-login de todas las sesiones existentes.
+   */
+  async revocarTotpPropio(
+    userId: string,
+    password: string,
+    codigo?: string,
+  ): Promise<{ revocado: boolean }> {
+    const user = await this.userModel.findById(userId);
+    if (!user) throw new NotFoundException('Usuario no encontrado');
+
+    // 1) Re-auth por contraseña (siempre).
+    const passwordOk = await bcrypt.compare(password, user.password);
+    if (!passwordOk) {
+      throw new UnauthorizedException('Contraseña actual incorrecta');
+    }
+
+    // 2) Segundo factor: si el usuario tiene 2FA activo, exigir un código válido
+    //    (TOTP o recuperación) para evitar que solo-password apague el MFA.
+    if (user.totpHabilitado) {
+      if (!codigo) {
+        throw new UnauthorizedException(
+          'Ingresá un código TOTP o de recuperación válido para desactivar el 2FA',
+        );
+      }
+      const encKey = this.config.get<string>('totp.encKey') || '';
+      let totpOk = false;
+      if (user.totpSecretCifrado) {
+        const secret = descifrar(user.totpSecretCifrado, encKey);
+        totpOk = await this.verificarTotpSingleUse(user, codigo, secret);
+      }
+      if (!totpOk) {
+        const recoveryOk = await this.consumirCodigoRecuperacion(user, codigo);
+        if (!recoveryOk) {
+          throw new UnauthorizedException('Código inválido');
+        }
+      }
+    }
+
+    user.totpSecretCifrado = null;
+    user.totpHabilitado = false;
+    user.totpActivadoEn = null;
+    user.codigosRecuperacion = [];
+    // Invalida todos los tokens previos: forzar re-login tras el downgrade.
+    user.tokenVersion = (user.tokenVersion || 0) + 1;
     await user.save();
     return { revocado: true };
   }

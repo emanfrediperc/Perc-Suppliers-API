@@ -54,6 +54,7 @@ describe('AuthService', () => {
     mockUser.codigosRecuperacion = [];
     mockUser.stepUpIntentosFallidos = 0;
     mockUser.stepUpBloqueadoHasta = null;
+    mockUser.ultimoTotpStep = 0;
     mockUser.save = jest.fn().mockResolvedValue(mockUser);
 
     const mockUserModel = {
@@ -92,6 +93,10 @@ describe('AuthService', () => {
     (authenticator.generateSecret as jest.Mock).mockReturnValue('SECRETBASE32');
     (authenticator.keyuri as jest.Mock).mockReturnValue('otpauth://totp/x');
     (authenticator.verify as jest.Mock).mockReturnValue(true);
+    // verificarTotpSingleUse usa checkDelta + allOptions (no verify) para trackear
+    // el step consumido. Default: código válido en el step actual (delta 0).
+    (authenticator.checkDelta as jest.Mock).mockReturnValue(0);
+    (authenticator.allOptions as jest.Mock).mockReturnValue({ step: 30 });
     (QRCode.toDataURL as jest.Mock).mockResolvedValue(
       'data:image/png;base64,xx',
     );
@@ -365,6 +370,7 @@ describe('AuthService', () => {
       mockUser.codigosRecuperacion = [];
       userModel.findById.mockResolvedValue(mockUser);
       (authenticator.verify as jest.Mock).mockReturnValue(false);
+      (authenticator.checkDelta as jest.Mock).mockReturnValue(null);
 
       await expect(
         service.loginVerificarTotp('challenge', '000000'),
@@ -379,6 +385,7 @@ describe('AuthService', () => {
       mockUser.codigosRecuperacion = [await bcrypt.hash(recovery, 10)];
       userModel.findById.mockResolvedValue(mockUser);
       (authenticator.verify as jest.Mock).mockReturnValue(false);
+      (authenticator.checkDelta as jest.Mock).mockReturnValue(null);
 
       const res = await service.loginVerificarTotp('challenge', recovery);
       expect(res.access_token).toBe('mock-jwt-token');
@@ -452,11 +459,174 @@ describe('AuthService', () => {
       mockUser.failedLoginAttempts = 4; // el 5º fallo dispara el lockout
       userModel.findById.mockResolvedValue(mockUser);
       (authenticator.verify as jest.Mock).mockReturnValue(false);
+      (authenticator.checkDelta as jest.Mock).mockReturnValue(null);
 
       await expect(
         service.loginVerificarTotp('challenge', '000000'),
       ).rejects.toThrow(UnauthorizedException);
       expect(mockUser.lockUntil).not.toBeNull();
+    });
+  });
+
+  // ─── REGRESIÓN #1: cambio de rol/activo invalida los tokens previos ─────────
+
+  describe('updateUser (bump de tokenVersion)', () => {
+    it('SEGURIDAD: cambiar el role bumpea tokenVersion (invalida tokens viejos)', async () => {
+      mockUser.role = 'admin';
+      mockUser.tokenVersion = 0;
+      mockUser.toObject = jest.fn(() => ({ ...mockUser }));
+      userModel.findById.mockResolvedValue(mockUser);
+
+      await service.updateUser(mockUser._id, { role: 'consulta' });
+
+      expect(mockUser.role).toBe('consulta');
+      expect(mockUser.tokenVersion).toBe(1); // rotó → el token admin viejo deja de valer
+      expect(mockUser.save).toHaveBeenCalled();
+    });
+
+    it('SEGURIDAD: desactivar (activo:false) bumpea tokenVersion', async () => {
+      mockUser.activo = true;
+      mockUser.tokenVersion = 5;
+      mockUser.toObject = jest.fn(() => ({ ...mockUser }));
+      userModel.findById.mockResolvedValue(mockUser);
+
+      await service.updateUser(mockUser._id, { activo: false });
+
+      expect(mockUser.activo).toBe(false);
+      expect(mockUser.tokenVersion).toBe(6);
+    });
+
+    it('cambiar solo nombre NO bumpea tokenVersion (no afecta authz)', async () => {
+      mockUser.tokenVersion = 2;
+      mockUser.toObject = jest.fn(() => ({ ...mockUser }));
+      userModel.findById.mockResolvedValue(mockUser);
+
+      await service.updateUser(mockUser._id, { nombre: 'Nuevo' });
+
+      expect(mockUser.tokenVersion).toBe(2);
+    });
+
+    it('setear el MISMO role no bumpea (no hubo cambio)', async () => {
+      mockUser.role = 'tesoreria';
+      mockUser.tokenVersion = 4;
+      mockUser.toObject = jest.fn(() => ({ ...mockUser }));
+      userModel.findById.mockResolvedValue(mockUser);
+
+      await service.updateUser(mockUser._id, { role: 'tesoreria' });
+
+      expect(mockUser.tokenVersion).toBe(4);
+    });
+  });
+
+  // ─── REGRESIÓN #3: replay de un mismo código TOTP en login ─────────────────
+
+  describe('verificarTotpSingleUse (anti-replay)', () => {
+    it('SEGURIDAD: rechaza reusar un código cuyo step ya fue consumido', async () => {
+      (authenticator.allOptions as jest.Mock).mockReturnValue({ step: 30 });
+      (authenticator.checkDelta as jest.Mock).mockReturnValue(0);
+      const stepActual = Math.floor(Date.now() / 1000 / 30);
+      mockUser.ultimoTotpStep = stepActual; // ese step ya se usó
+
+      const ok = await service.verificarTotpSingleUse(
+        mockUser,
+        '123456',
+        'SECRET',
+      );
+      expect(ok).toBe(false); // replay bloqueado
+    });
+
+    it('acepta un código fresco (step nuevo) y persiste el step consumido', async () => {
+      (authenticator.allOptions as jest.Mock).mockReturnValue({ step: 30 });
+      (authenticator.checkDelta as jest.Mock).mockReturnValue(0);
+      mockUser.ultimoTotpStep = 0;
+      userModel.updateOne.mockResolvedValue({ modifiedCount: 1 });
+
+      const ok = await service.verificarTotpSingleUse(
+        mockUser,
+        '123456',
+        'SECRET',
+      );
+      expect(ok).toBe(true);
+      expect(userModel.updateOne).toHaveBeenCalledWith(
+        expect.objectContaining({ _id: mockUser._id }),
+        expect.objectContaining({ $set: expect.any(Object) }),
+      );
+    });
+
+    it('SEGURIDAD: bajo carrera, si el step ya avanzó (modifiedCount 0) rechaza', async () => {
+      (authenticator.allOptions as jest.Mock).mockReturnValue({ step: 30 });
+      (authenticator.checkDelta as jest.Mock).mockReturnValue(0);
+      mockUser.ultimoTotpStep = 0;
+      userModel.updateOne.mockResolvedValue({ modifiedCount: 0 }); // otro request ganó
+
+      const ok = await service.verificarTotpSingleUse(
+        mockUser,
+        '123456',
+        'SECRET',
+      );
+      expect(ok).toBe(false);
+    });
+
+    it('rechaza un código TOTP inválido (checkDelta null)', async () => {
+      (authenticator.checkDelta as jest.Mock).mockReturnValue(null);
+      const ok = await service.verificarTotpSingleUse(
+        mockUser,
+        '000000',
+        'SECRET',
+      );
+      expect(ok).toBe(false);
+    });
+  });
+
+  // ─── REGRESIÓN #5: revocar el 2FA propio exige re-autenticación ────────────
+
+  describe('revocarTotpPropio (re-auth obligatoria)', () => {
+    it('SEGURIDAD: rechaza si la contraseña actual es incorrecta', async () => {
+      mockUser.password = await bcrypt.hash('realPassword', 10);
+      mockUser.totpHabilitado = true;
+      userModel.findById.mockResolvedValue(mockUser);
+
+      await expect(
+        service.revocarTotpPropio(mockUser._id, 'passwordIncorrecta'),
+      ).rejects.toThrow(UnauthorizedException);
+      // NO se desactivó el 2FA
+      expect(mockUser.totpHabilitado).toBe(true);
+    });
+
+    it('SEGURIDAD: con 2FA activo, exige también un código (password sola no alcanza)', async () => {
+      mockUser.password = await bcrypt.hash('realPassword', 10);
+      mockUser.totpHabilitado = true;
+      mockUser.codigosRecuperacion = [];
+      userModel.findById.mockResolvedValue(mockUser);
+
+      await expect(
+        service.revocarTotpPropio(mockUser._id, 'realPassword'),
+      ).rejects.toThrow(UnauthorizedException);
+      expect(mockUser.totpHabilitado).toBe(true);
+    });
+
+    it('SEGURIDAD: revoca con password + TOTP válido y bumpea tokenVersion', async () => {
+      mockUser.password = await bcrypt.hash('realPassword', 10);
+      mockUser.totpHabilitado = true;
+      mockUser.totpSecretCifrado = cifrar('SECRETBASE32', TEST_ENC_KEY);
+      mockUser.tokenVersion = 2;
+      mockUser.ultimoTotpStep = 0;
+      configService.get.mockImplementation((k: string) =>
+        k === 'totp.encKey' ? TEST_ENC_KEY : '',
+      );
+      userModel.findById.mockResolvedValue(mockUser);
+      userModel.updateOne.mockResolvedValue({ modifiedCount: 1 });
+      (authenticator.checkDelta as jest.Mock).mockReturnValue(0);
+      (authenticator.allOptions as jest.Mock).mockReturnValue({ step: 30 });
+
+      const res = await service.revocarTotpPropio(
+        mockUser._id,
+        'realPassword',
+        '123456',
+      );
+      expect(res.revocado).toBe(true);
+      expect(mockUser.totpHabilitado).toBe(false);
+      expect(mockUser.tokenVersion).toBe(3); // invalida sesiones tras el downgrade
     });
   });
 });

@@ -38,6 +38,11 @@ export class AprobacionPublicController {
     private readonly geoService: GeoService,
   ) {}
 
+  /** Secreto compartido para confiar en headers CloudFront-Viewer-* (forense). */
+  private cloudfrontSecret(): string | undefined {
+    return this.configService.get<string>('forensics.cloudfrontSharedSecret');
+  }
+
   @Get('contexto-token/:token')
   @Throttle({ default: { ttl: 60_000, limit: 10 } })
   @ApiOperation({
@@ -118,7 +123,7 @@ export class AprobacionPublicController {
       throw new ServiceUnavailableException('Funcionalidad deshabilitada');
     }
 
-    const ip = extraerIp(req);
+    const ip = extraerIp(req, this.cloudfrontSecret());
     const userAgent = extraerUserAgent(req);
     const geo = this.geoService.resolver(req);
 
@@ -160,7 +165,7 @@ export class AprobacionPublicController {
     if (this.configService.get<boolean>('magicLink.enabled') !== true) {
       throw new ServiceUnavailableException('Funcionalidad deshabilitada');
     }
-    const ip = extraerIp(req);
+    const ip = extraerIp(req, this.cloudfrontSecret());
     const userAgent = extraerUserAgent(req);
     try {
       return await this.service.iniciarStepUp(dto.token, ip, userAgent);
@@ -189,7 +194,7 @@ export class AprobacionPublicController {
     if (this.configService.get<boolean>('magicLink.enabled') !== true) {
       throw new ServiceUnavailableException('Funcionalidad deshabilitada');
     }
-    const ip = extraerIp(req);
+    const ip = extraerIp(req, this.cloudfrontSecret());
     const userAgent = extraerUserAgent(req);
     return this.service.verificarStepUp(
       dto.token,

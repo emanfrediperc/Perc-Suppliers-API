@@ -1,10 +1,20 @@
 import { UnauthorizedException } from '@nestjs/common';
 import { createHash } from 'crypto';
 import * as bcrypt from 'bcrypt';
+import { authenticator } from 'otplib';
 import { StepUpService } from './step-up.service';
 
 jest.mock('bcrypt');
+jest.mock('otplib');
+// descifrar es irrelevante para el anti-replay: stubeamos para que devuelva el
+// secreto crudo sin tocar AES.
+jest.mock('../../common/utils/cifrado.util', () => ({
+  descifrar: (v: string) => v,
+  cifrar: (v: string) => v,
+}));
 const compareMock = bcrypt.compare as unknown as jest.Mock;
+const checkDeltaMock = authenticator.checkDelta as unknown as jest.Mock;
+const allOptionsMock = authenticator.allOptions as unknown as jest.Mock;
 
 /**
  * Tests de la lógica crítica de seguridad del step-up: verificación de factor,
@@ -58,6 +68,7 @@ describe('StepUpService', () => {
     };
     const userModel: any = {
       findById: jest.fn().mockResolvedValue(over.user ?? makeUser()),
+      updateOne: jest.fn().mockResolvedValue({ modifiedCount: 1 }),
     };
     const tokenService: any = { verify: jest.fn().mockResolvedValue(tokenDoc) };
     const auditLog: any = { log: jest.fn().mockResolvedValue(undefined) };
@@ -172,5 +183,78 @@ describe('StepUpService', () => {
     await expect(
       svc.validarYConsumirProof('OTRA-apr', 'u1', 'd1', 'proof'),
     ).rejects.toThrow(UnauthorizedException);
+  });
+
+  // ─── REGRESIÓN #3: replay de un código TOTP en step-up ─────────────────────
+
+  it('SEGURIDAD: step-up TOTP rechaza el replay de un código ya consumido', async () => {
+    const stepActual = Math.floor(Date.now() / 1000 / 30);
+    const desafio = makeDesafio({ factorRequerido: 'totp' });
+    const user = makeUser({
+      totpHabilitado: true,
+      totpSecretCifrado: 'SECRET',
+      ultimoTotpStep: stepActual, // ese step ya se usó
+    });
+    const { svc } = build({ desafio, user });
+    checkDeltaMock.mockReturnValue(0);
+    allOptionsMock.mockReturnValue({ step: 30 });
+
+    await expect(
+      svc.verificarDesafio('raw', 'd1', '123456', '1.2.3.4', 'jest'),
+    ).rejects.toThrow(UnauthorizedException);
+    expect(desafio.satisfecho).toBe(false); // replay no emite proof
+  });
+
+  it('step-up TOTP acepta un código fresco y emite proof (consume el step)', async () => {
+    const desafio = makeDesafio({ factorRequerido: 'totp' });
+    const user = makeUser({
+      totpHabilitado: true,
+      totpSecretCifrado: 'SECRET',
+      ultimoTotpStep: 0,
+    });
+    const { svc, userModel } = build({ desafio, user });
+    checkDeltaMock.mockReturnValue(0);
+    allOptionsMock.mockReturnValue({ step: 30 });
+
+    const r = await svc.verificarDesafio('raw', 'd1', '123456', '1.2.3.4', 'j');
+    expect(typeof r.stepUpProof).toBe('string');
+    expect(desafio.satisfecho).toBe(true);
+    expect(userModel.updateOne).toHaveBeenCalled(); // persistió el step consumido
+  });
+
+  // ─── REGRESIÓN #2 (parte step-up): twins JWT scoped a (aprobacionId, userId) ─
+
+  it('iniciarDesafioJwt crea un desafío scoped al userId del JWT (sin magic-link)', async () => {
+    const { svc, desafioModel, tokenService } = build();
+    const r = await svc.iniciarDesafioJwt(
+      'apr1',
+      'u1',
+      'a@p.com',
+      'password',
+      '1.2.3.4',
+      'jest',
+    );
+    expect(r.desafioId).toBe('d1');
+    // NO se usa el magic-link token en el path JWT.
+    expect(tokenService.verify).not.toHaveBeenCalled();
+    expect(desafioModel.create).toHaveBeenCalledWith(
+      expect.objectContaining({ aprobacionId: 'apr1', userId: 'u1' }),
+    );
+  });
+
+  it('verificarDesafioJwt valida el factor con identidad del JWT', async () => {
+    const desafio = makeDesafio();
+    const { svc } = build({ desafio });
+    compareMock.mockResolvedValue(true);
+    const r = await svc.verificarDesafioJwt(
+      'apr1',
+      'u1',
+      'd1',
+      'pass-ok',
+      '1.2.3.4',
+      'jest',
+    );
+    expect(typeof r.stepUpProof).toBe('string');
+    expect(desafio.satisfecho).toBe(true);
   });
 });

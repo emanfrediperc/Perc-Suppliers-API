@@ -33,6 +33,14 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     ) {
       throw new UnauthorizedException();
     }
-    return { userId: payload.sub, email: payload.email, role: payload.role };
+    // SEGURIDAD: el role se toma SIEMPRE de la DB, nunca del token. Así el rol
+    // no queda "congelado" en un access token viejo si un admin lo cambia.
+    // mustChangePassword se propaga para que el guard global lo enforce server-side.
+    return {
+      userId: payload.sub,
+      email: payload.email,
+      role: user.role,
+      mustChangePassword: user.mustChangePassword ?? false,
+    };
   }
 }

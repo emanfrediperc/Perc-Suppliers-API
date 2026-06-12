@@ -256,6 +256,13 @@ export class AprobacionService {
     decision: string,
     comentario?: string,
     forense?: DatosForenses,
+    stepUp?: {
+      /** El proof ya fue validado/consumido aguas arriba (path magic-link). */
+      yaValidado?: boolean;
+      /** Path JWT: proof a validar+consumir acá, scoped a (aprobacionId, userId). */
+      desafioId?: string;
+      stepUpProof?: string;
+    },
   ) {
     const aprobacion = await this.aprobacionModel.findById(id);
     if (!aprobacion) throw new NotFoundException('Aprobacion no encontrada');
@@ -264,6 +271,39 @@ export class AprobacionService {
 
     if (aprobacion.createdBy === user.userId) {
       throw new BadRequestException('No puede aprobar su propia solicitud');
+    }
+
+    // ENFORCEMENT step-up (server-side, AMBOS canales). El path magic-link valida
+    // el proof antes de llamar acá (yaValidado=true). El path JWT NO traía ningún
+    // segundo factor: el control era trivialmente evitable eligiendo el canal UI.
+    // Ahora, si la aprobación exige step-up y no llega un proof ya validado, lo
+    // exigimos y consumimos también acá, scoped al userId del JWT.
+    // Sólo gatea el acto de APROBAR (autoriza el movimiento de dinero); un rechazo
+    // no necesita segundo factor.
+    const stepUpReq =
+      decision === 'aprobada'
+        ? await this.requiereStepUp(aprobacion)
+        : { requerido: false };
+    let stepUpForenseExtra: Partial<DatosForenses> = {};
+    if (stepUpReq.requerido && !stepUp?.yaValidado) {
+      if (!stepUp?.stepUpProof || !stepUp?.desafioId) {
+        throw new UnauthorizedException('Step-up requerido');
+      }
+      const proof = await this.stepUpService.validarYConsumirProof(
+        id,
+        user.userId,
+        stepUp.desafioId,
+        stepUp.stepUpProof,
+      );
+      stepUpForenseExtra = {
+        stepUpRequerido: true,
+        stepUpSatisfecho: true,
+        factorStepUp: proof.factorUsado ?? undefined,
+        desafioId: proof.desafioId,
+      };
+    }
+    if (stepUpForenseExtra.stepUpSatisfecho) {
+      forense = { ...forense, ...stepUpForenseExtra };
     }
 
     const alreadyDecided = aprobacion.aprobadores.find(
@@ -547,12 +587,15 @@ export class AprobacionService {
 
     // Delegar al método decidir existente (evita duplicar lógica de transición de estado).
     // El rastro forense se persiste EN la decisión (sobrevive al TTL del token).
+    // yaValidado: true → el proof ya fue validado/consumido arriba en este path;
+    // decidir() no debe re-exigirlo, pero SÍ enforcea el step-up en el path JWT.
     const aprobacion = await this.decidir(
       aprobacionIdStr,
       { userId, email: user.email, nombre: user.nombre },
       decisionInterna,
       comentario,
       { ip, userAgent, tokenHash: tokenDoc.tokenHash, geo, ...stepUpForense },
+      { yaValidado: true },
     );
 
     // T021 — Auditar consumo del token (el interceptor global no corre en rutas sin JWT)
@@ -941,6 +984,57 @@ export class AprobacionService {
   ) {
     return this.stepUpService.verificarDesafio(
       rawToken,
+      desafioId,
+      secreto,
+      ip,
+      userAgent,
+    );
+  }
+
+  /**
+   * Inicia un desafío de step-up para el path JWT (aprobador autenticado por Bearer).
+   * Resuelve el factor según config + enrolamiento. Lanza si la aprobación no
+   * requiere segundo factor o si el solicitante es el creador (no puede auto-aprobar).
+   */
+  async iniciarStepUpJwt(
+    aprobacionId: string,
+    user: { userId: string; email: string },
+    ip: string,
+    userAgent: string,
+  ) {
+    const aprobacion = await this.aprobacionModel.findById(aprobacionId);
+    if (!aprobacion) throw new NotFoundException('Aprobacion no encontrada');
+    if (aprobacion.createdBy === user.userId) {
+      throw new BadRequestException('No puede aprobar su propia solicitud');
+    }
+    const { requerido, factor } = await this.requiereStepUp(aprobacion);
+    if (!requerido) {
+      throw new BadRequestException(
+        'Esta aprobación no requiere segundo factor',
+      );
+    }
+    return this.stepUpService.iniciarDesafioJwt(
+      aprobacionId,
+      user.userId,
+      user.email,
+      factor,
+      ip,
+      userAgent,
+    );
+  }
+
+  /** Verifica el segundo factor (path JWT) y devuelve el proof single-use. */
+  async verificarStepUpJwt(
+    aprobacionId: string,
+    user: { userId: string },
+    desafioId: string,
+    secreto: string,
+    ip: string,
+    userAgent: string,
+  ) {
+    return this.stepUpService.verificarDesafioJwt(
+      aprobacionId,
+      user.userId,
       desafioId,
       secreto,
       ip,
