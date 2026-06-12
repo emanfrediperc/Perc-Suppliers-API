@@ -6,6 +6,7 @@ import type { NestExpressApplication } from '@nestjs/platform-express';
 import helmet from 'helmet';
 import { AppModule } from './app.module';
 import { HttpExceptionFilter } from './common/filters/http-exception.filter';
+import { isSwaggerEnabled } from './common/utils/swagger-gate.util';
 
 async function bootstrap() {
   const app = await NestFactory.create<NestExpressApplication>(AppModule);
@@ -43,10 +44,12 @@ async function bootstrap() {
     credentials: true,
   });
 
-  const isProduction = process.env.NODE_ENV === 'production';
-  const swaggerEnabled = process.env.SWAGGER_ENABLED === '1';
-
-  if (!isProduction || swaggerEnabled) {
+  // Gate de Swagger por ALLOW-LIST (fail-closed) — ver isSwaggerEnabled().
+  // Antes era `!isProduction || swaggerEnabled`, que dependia de NODE_ENV='production'
+  // para apagarse; pero el deploy real NUNCA setea NODE_ENV, asi que el gate fallaba
+  // ABIERTO y exponia /api/docs anonimamente. Ahora Swagger SOLO se monta con opt-in
+  // explicito (SWAGGER_ENABLED=1) o en un entorno de desarrollo declarado.
+  if (isSwaggerEnabled(process.env)) {
     const config = new DocumentBuilder()
       .setTitle('Perc Suppliers API')
       .setDescription('API para gestion de pagos a proveedores')
@@ -60,7 +63,7 @@ async function bootstrap() {
       `Swagger UI: http://localhost:${process.env.PORT || 3100}/api/docs`,
     );
   } else {
-    console.log('Swagger UI disabled (NODE_ENV=production)');
+    console.log('Swagger UI disabled (set SWAGGER_ENABLED=1 to enable)');
   }
 
   const port = process.env.PORT || 3100;

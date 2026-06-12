@@ -4,6 +4,35 @@ export default () => {
     throw new Error('JWT_SECRET must be set and at least 32 characters');
   }
 
+  const isProduction = process.env.NODE_ENV === 'production';
+
+  // CBU_ENC_KEY: clave AES-256-GCM (hex de 64 chars / 32 bytes) para cifrar el CBU at-rest.
+  // - Si está presente con formato inválido => fallar SIEMPRE al boot (no en runtime en la
+  //   primera escritura, como haría parseKey()): el operador se entera al arrancar.
+  // - Si falta y estamos en producción => fail-closed: no arrancar guardando el CBU en
+  //   plaintext silenciosamente (los datos bancarios son lo más sensible del sistema).
+  // - Si falta en dev/test => warning visible (coexistencia plano/cifrado para migración).
+  const cbuEncKey = process.env.CBU_ENC_KEY || '';
+  const cbuKeyFormatoValido = /^[0-9a-f]{64}$/i.test(cbuEncKey);
+  if (cbuEncKey && !cbuKeyFormatoValido) {
+    throw new Error(
+      'CBU_ENC_KEY inválida: debe ser hex de 64 caracteres (32 bytes) para AES-256-GCM',
+    );
+  }
+  if (!cbuEncKey) {
+    if (isProduction) {
+      throw new Error(
+        'CBU_ENC_KEY must be set in production (hex de 64 chars) — el cifrado at-rest ' +
+          'del CBU es obligatorio: arrancar sin key guardaría los datos bancarios en plaintext',
+      );
+    }
+    // eslint-disable-next-line no-console
+    console.warn(
+      '[CONFIG] CBU_ENC_KEY no seteada — cifrado at-rest del CBU DESACTIVADO: ' +
+        'los datos bancarios se guardan en PLAINTEXT. Definí CBU_ENC_KEY (hex de 64 chars) para activarlo.',
+    );
+  }
+
   const isLocalStack = !!process.env.AWS_S3_ENDPOINT;
   const awsAccessKeyId = process.env.AWS_ACCESS_KEY_ID;
   const awsSecretAccessKey = process.env.AWS_SECRET_ACCESS_KEY;
@@ -66,6 +95,15 @@ export default () => {
        * En dev local sin proxy usá `0` (req.ip = socket, no spoofeable vía X-Forwarded-For).
        */
       trustProxyHops: parseInt(process.env.TRUST_PROXY_HOPS || '2', 10),
+      /**
+       * Secreto compartido inyectado por CloudFront en un custom header
+       * (CLOUDFRONT_SHARED_SECRET). SÓLO si el request trae este header con el
+       * valor correcto se confía en los headers CloudFront-Viewer-* (IP/geo) para
+       * el rastro forense. Sin secreto configurado, esos headers se IGNORAN y la
+       * IP sale de req.ip (trust proxy, no spoofeable). Evita que un cliente del
+       * endpoint público de magic-link envenene la evidencia de no-repudio.
+       */
+      cloudfrontSharedSecret: process.env.CLOUDFRONT_SHARED_SECRET || '',
     },
     stepUp: {
       /** Master switch del segundo factor en aprobaciones de monto alto. */
@@ -83,6 +121,24 @@ export default () => {
        * Requerida sólo si se habilita TOTP. Vacía => enrolamiento TOTP deshabilitado.
        */
       encKey: process.env.TOTP_ENC_KEY || '',
+    },
+    cbu: {
+      /**
+       * Clave AES-256-GCM para cifrar el CBU at-rest: hex de 64 chars (32 bytes).
+       * Validada al boot (ver arriba): formato inválido => throw; vacía en producción
+       * => throw (fail-closed); vacía en dev/test => warning (plaintext, coexistencia).
+       */
+      encKey: cbuEncKey,
+    },
+    audit: {
+      /**
+       * Clave secreta server-side para el HMAC-SHA256 de la cadena del audit log.
+       * Vive FUERA de la base de datos, de modo que un insider con acceso de escritura
+       * a `audit_logs` no pueda recomputar la cadena tras editar registros (no tiene el secreto).
+       * Si está vacía, la cadena cae a SHA-256 plano (best-effort, NO resiste insiders) —
+       * sólo para dev local. Generá una con: openssl rand -hex 32
+       */
+      hmacKey: process.env.AUDIT_HMAC_KEY || '',
     },
     login2fa: {
       /**

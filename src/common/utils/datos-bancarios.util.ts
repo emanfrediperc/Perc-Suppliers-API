@@ -1,3 +1,4 @@
+import { Logger } from '@nestjs/common';
 import { cifrar, descifrar } from './cifrado.util';
 
 /**
@@ -8,7 +9,15 @@ import { cifrar, descifrar } from './cifrado.util';
  *   migración puede ser gradual y dev sin key sigue funcionando.
  * - Acceso: sólo los roles que ejecutan/autorizan pagos ven el CBU completo; el
  *   resto lo ve enmascarado (`****1234`). 'consulta' (solo lectura) lo ve enmascarado.
+ * - Integridad: si un CBU cifrado falla la verificación del authTag de GCM (dato
+ *   manipulado at-rest o key equivocada) NUNCA se devuelve el ciphertext crudo:
+ *   se loguea como evento de seguridad y se devuelve un sentinel explícito.
  */
+
+const logger = new Logger('DatosBancarios');
+
+/** Sentinel devuelto cuando un CBU cifrado no supera la verificación de integridad (authTag). */
+export const CBU_INVALIDO = '[CBU_INVALIDO]';
 
 const ROLES_VEN_CBU = ['admin', 'tesoreria', 'operador'];
 
@@ -34,7 +43,16 @@ export function cifrarCbu(cbu?: string | null): string | undefined {
   return cifrar(cbu, key);
 }
 
-/** Descifra un CBU si está cifrado y hay key; si es plano o no hay key, lo devuelve igual. */
+/**
+ * Descifra un CBU si está cifrado y hay key; si es plano o no hay key, lo devuelve igual.
+ *
+ * Si el valor parece cifrado pero `descifrar()` lanza (authTag de GCM inválido =>
+ * manipulación at-rest o key equivocada) NO se devuelve el ciphertext crudo: eso
+ * anularía la única garantía de integridad que aporta GCM y filtraría el blob cifrado
+ * a la respuesta/reporte. En su lugar se registra un evento de seguridad y se devuelve
+ * un sentinel explícito (`CBU_INVALIDO`), de modo que el consumidor muestre un error
+ * claro en vez de basura hexadecimal sin que la generación de reportes/PDF se rompa.
+ */
 export function descifrarCbu(cbu?: string | null): string | undefined {
   if (!cbu) return cbu ?? undefined;
   const key = encKey();
@@ -42,7 +60,13 @@ export function descifrarCbu(cbu?: string | null): string | undefined {
   try {
     return descifrar(cbu, key);
   } catch {
-    return cbu; // dato corrupto / key equivocada: no romper la respuesta
+    // authTag inválido: posible tampering del CBU at-rest o key equivocada.
+    // No devolver el ciphertext: loguear y señalizar con un sentinel.
+    logger.error(
+      'CBU cifrado con authTag inválido: posible manipulación at-rest o CBU_ENC_KEY equivocada. ' +
+        'Se descarta el valor y se devuelve el sentinel CBU_INVALIDO.',
+    );
+    return CBU_INVALIDO;
   }
 }
 
@@ -81,9 +105,11 @@ export function enmascararEmpresaBancarios(emp: any): any {
   if (!emp) return emp;
   const plain = toPlain(emp);
   if (plain.datosBancarios?.cbu) {
+    const descifrado = descifrarCbu(plain.datosBancarios.cbu);
     plain.datosBancarios = {
       ...plain.datosBancarios,
-      cbu: maskCbu(descifrarCbu(plain.datosBancarios.cbu)),
+      // Un CBU corrupto no se enmascara: se propaga el sentinel como señal explícita.
+      cbu: descifrado === CBU_INVALIDO ? CBU_INVALIDO : maskCbu(descifrado),
     };
   }
   return plain;
