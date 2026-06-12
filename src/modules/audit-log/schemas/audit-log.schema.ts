@@ -63,14 +63,22 @@ export class AuditLog {
   @Prop()
   descripcion: string;
 
-  // Hash encadenado por (entidad, entidadId): sha256(prevHash + canonical(entry))
-  // Permite detectar tampering en el audit log de cualquier entidad.
-  // Es best-effort: el log() es no-bloqueante, así que si falla el hash no rompe la operación.
+  // Hash encadenado por (entidad, entidadId).
+  // Con AUDIT_HMAC_KEY configurada: HMAC-SHA256(secreto, prevHash + canonical(entry)) — el secreto
+  // vive fuera de la DB, así que un insider con write a `audit_logs` NO puede recomputar la cadena.
+  // Sin la clave (sólo dev): SHA-256 plano (best-effort, NO resiste insiders).
+  // El log() es no-bloqueante, así que si falla el hash no rompe la operación.
   @Prop()
   hash?: string;
 
   @Prop()
   prevHash?: string;
+
+  // true => la entry fue sellada con HMAC (clave server-side). Se incluye en el canonical,
+  // de modo que un insider no puede "downgradear" una entry firmada a SHA-256 plano sin
+  // romper la cadena. Default false para entradas legacy (pre-HMAC).
+  @Prop({ default: false })
+  hmac?: boolean;
 }
 
 export const AuditLogSchema = SchemaFactory.createForClass(AuditLog);
