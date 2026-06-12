@@ -166,7 +166,11 @@ export class PrestamosService {
     }
   }
 
-  async update(id: string, dto: UpdatePrestamoDto): Promise<PrestamoDocument> {
+  async update(
+    id: string,
+    dto: UpdatePrestamoDto,
+    currentUser: { userId: string; email: string },
+  ): Promise<PrestamoDocument> {
     const prestamo = await this.findOne(id);
 
     if (prestamo.status !== PrestamoStatus.ACTIVE) {
@@ -177,9 +181,19 @@ export class PrestamosService {
 
     const changes: string[] = [];
 
-    if (dto.capital !== undefined && dto.capital !== prestamo.capital) {
-      changes.push(`Cap: ${prestamo.capital}→${dto.capital}`);
-      prestamo.capital = dto.capital;
+    // SEGURIDAD — el capital es el campo sobre el que se evalúa el threshold de
+    // aprobaciones (getRequiredApprovals) y el step-up (requiereStepUp), y eso
+    // SOLO ocurre una vez, en create(). Mutar el capital de un préstamo ya ACTIVE
+    // permitía pasar de 100k (1 aprobador, sin step-up) a 50M sin re-aprobación,
+    // evadiendo el gate. Por eso un cambio de capital NO se aplica directo: se
+    // re-dispara el flujo de aprobación (vuelve a ESPERANDO_APROBACION y se crea
+    // una nueva Aprobacion para el nuevo monto). El resto de los campos
+    // (rate/dueDate/vehicle) no afectan el threshold y se editan in-place.
+    const capitalCambia =
+      dto.capital !== undefined && dto.capital !== prestamo.capital;
+
+    if (capitalCambia) {
+      return this.solicitarReaprobacionCapital(prestamo, dto, currentUser);
     }
 
     if (dto.rate !== undefined && dto.rate !== prestamo.rate) {
@@ -214,6 +228,83 @@ export class PrestamosService {
     return prestamo.save();
   }
 
+  /**
+   * Re-dispara el gate de aprobación cuando cambia el capital de un préstamo ACTIVE.
+   * Aplica el resto de los campos editables (rate/dueDate/vehicle) en el mismo paso,
+   * pasa el préstamo a ESPERANDO_APROBACION y crea una nueva Aprobacion para el
+   * nuevo capital — de forma atómica, igual que create(). El listener de aprobación
+   * vuelve a ponerlo ACTIVE solo si se aprueba con el threshold del nuevo monto.
+   */
+  private async solicitarReaprobacionCapital(
+    prestamo: PrestamoDocument,
+    dto: UpdatePrestamoDto,
+    currentUser: { userId: string; email: string },
+  ): Promise<PrestamoDocument> {
+    const nuevoCapital = dto.capital as number;
+    const changes: string[] = [`Cap: ${prestamo.capital}→${nuevoCapital}`];
+
+    const nuevoRate =
+      dto.rate !== undefined && dto.rate !== prestamo.rate
+        ? dto.rate
+        : prestamo.rate;
+    if (nuevoRate !== prestamo.rate) {
+      changes.push(`Tasa: ${prestamo.rate}→${nuevoRate}`);
+    }
+
+    let nuevoDueDate: Date = new Date(prestamo.dueDate);
+    if (dto.dueDate !== undefined) {
+      const candidate = new Date(dto.dueDate);
+      if (candidate.getTime() !== new Date(prestamo.dueDate).getTime()) {
+        const oldDue = new Date(prestamo.dueDate).toISOString().split('T')[0];
+        changes.push(`Venc: ${oldDue}→${dto.dueDate}`);
+        nuevoDueDate = candidate;
+      }
+    }
+
+    let nuevoVehicle = prestamo.vehicle;
+    if (dto.vehicle !== undefined && dto.vehicle !== prestamo.vehicle) {
+      changes.push(`Vehículo: ${prestamo.vehicle}→${dto.vehicle}`);
+      nuevoVehicle = dto.vehicle;
+    }
+
+    const session = await this.connection.startSession();
+    try {
+      let resultado: PrestamoDocument;
+      await session.withTransaction(async () => {
+        prestamo.capital = nuevoCapital;
+        prestamo.rate = nuevoRate;
+        prestamo.dueDate = nuevoDueDate;
+        prestamo.vehicle = nuevoVehicle;
+        prestamo.status = PrestamoStatus.ESPERANDO_APROBACION;
+        prestamo.history.push({
+          date: new Date(),
+          action: 'Editado',
+          detail: `${changes.join(' · ')} · Motivo: ${dto.reason} · Re-aprobación requerida`,
+        });
+        resultado = await prestamo.save({ session });
+
+        // Lanza BadRequestException si no hay aprobadores activos → aborta la transacción
+        // y el capital nunca queda persistido sin su Aprobacion.
+        // tipo 'creacion': el schema Aprobacion sólo admite el enum
+        // ['pago','anulacion','creacion']; una edición de capital reabre el gate
+        // como si fuera una creación nueva (re-evalúa el threshold sobre el monto).
+        await this.aprobacionService.createAprobacion({
+          entidad: 'prestamos',
+          entidadId: prestamo._id.toString(),
+          tipo: 'creacion',
+          monto: nuevoCapital,
+          descripcion: `Edición de capital del préstamo ${prestamo.lender.razonSocialCache} → ${prestamo.borrower.razonSocialCache} a ${new Intl.NumberFormat('es-AR').format(nuevoCapital)} ${prestamo.currency}`,
+          createdBy: currentUser.userId,
+          createdByEmail: currentUser.email,
+          datosOperacion: { capital: nuevoCapital, reason: dto.reason },
+        });
+      });
+      return resultado!;
+    } finally {
+      await session.endSession();
+    }
+  }
+
   async clear(id: string): Promise<PrestamoDocument> {
     const prestamo = await this.findOne(id);
 
@@ -240,7 +331,11 @@ export class PrestamosService {
     return prestamo.save();
   }
 
-  async renew(id: string, dto: RenewPrestamoDto): Promise<PrestamoDocument> {
+  async renew(
+    id: string,
+    dto: RenewPrestamoDto,
+    currentUser: { userId: string; email: string },
+  ): Promise<PrestamoDocument> {
     const session = await this.connection.startSession();
     session.startTransaction();
 
@@ -276,6 +371,13 @@ export class PrestamosService {
       const newRate = dto.rate ?? oldPrestamo.rate;
       const historyDetail = `Capital ${formattedCapital} · Tasa ${newRate}% · ${newVehicle} (Renovación)`;
 
+      // SEGURIDAD — la renovación CREA un préstamo nuevo (un crédito nuevo). Antes nacía
+      // directamente en ACTIVE, lo que: (1) saltaba por completo el gate de aprobación que
+      // create() sí aplica, y (2) aceptaba dto.capital arbitrario, permitiendo fabricar un
+      // crédito millonario sin que getRequiredApprovals/requiereStepUp lo vieran. El nuevo
+      // préstamo ahora nace en ESPERANDO_APROBACION y se crea una Aprobacion para newCapital,
+      // de modo que el threshold se evalúa sobre el monto renovado. Solo el listener de
+      // aprobación lo pasa a ACTIVE.
       const [newPrestamo] = await this.prestamoModel.create(
         [
           {
@@ -288,13 +390,28 @@ export class PrestamosService {
             startDate: newStartDate,
             dueDate: newDueDate,
             vehicle: newVehicle,
-            status: PrestamoStatus.ACTIVE,
+            status: PrestamoStatus.ESPERANDO_APROBACION,
             renewedFrom: oldPrestamo._id,
             history: [{ date: new Date(), action: 'Creado', detail: historyDetail }],
           },
         ],
         { session },
       );
+
+      // Lanza BadRequestException si no hay aprobadores activos → aborta la transacción
+      // (ni la renovación del viejo ni el nuevo préstamo se persisten sin Aprobacion).
+      // tipo 'creacion': la renovación CREA un préstamo nuevo; el schema Aprobacion
+      // sólo admite el enum ['pago','anulacion','creacion'].
+      await this.aprobacionService.createAprobacion({
+        entidad: 'prestamos',
+        entidadId: newPrestamo._id.toString(),
+        tipo: 'creacion',
+        monto: newCapital,
+        descripcion: `Renovación del préstamo ${oldPrestamo.lender.razonSocialCache} → ${oldPrestamo.borrower.razonSocialCache} por ${formattedCapital} ${oldPrestamo.currency}`,
+        createdBy: currentUser.userId,
+        createdByEmail: currentUser.email,
+        datosOperacion: { capital: newCapital, renewedFrom: oldPrestamo._id.toString() },
+      });
 
       await session.commitTransaction();
       return newPrestamo;
